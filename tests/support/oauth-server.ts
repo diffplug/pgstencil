@@ -18,7 +18,10 @@ export const oauthCredentials = {
   },
 } satisfies OAuthSettings;
 const key = generateKeyPairSync('rsa', { modulusLength: 2048 });
-const otherKey = generateKeyPairSync('rsa', { modulusLength: 2048 });
+// Only the badSignature grant needs a second key; generating it is ~40ms.
+let wrongKey: typeof key | undefined;
+const otherKey = () =>
+  (wrongKey ??= generateKeyPairSync('rsa', { modulusLength: 2048 }));
 const jwk = {
   ...key.publicKey.export({ format: 'jwk' }),
   kid: 'test-key',
@@ -145,7 +148,7 @@ export async function mockOAuthServer() {
             ).toString('base64url'),
             Buffer.from(JSON.stringify(claims)).toString('base64url'),
           ].join('.');
-          response.id_token = `${unsigned}.${sign('RSA-SHA256', Buffer.from(unsigned), grant.options.badSignature ? otherKey.privateKey : key.privateKey).toString('base64url')}`;
+          response.id_token = `${unsigned}.${sign('RSA-SHA256', Buffer.from(unsigned), grant.options.badSignature ? otherKey().privateKey : key.privateKey).toString('base64url')}`;
         }
         return json(response);
       }

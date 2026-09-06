@@ -28,9 +28,11 @@ export interface ProviderIdentity {
   email: string;
 }
 export class IdentityError extends Error {}
-export function isProvider(value: string): value is Provider {
-  return PROVIDERS.some((provider) => provider === value);
-}
+const GITHUB_HEADERS = new Headers({
+  accept: 'application/vnd.github+json',
+  'x-github-api-version': '2026-03-10',
+  'user-agent': 'pgstencil',
+});
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new IdentityError('Invalid provider response');
@@ -92,7 +94,7 @@ export class OAuthProviders {
     // GitHub implements OAuth 2, but does not publish OIDC discovery metadata.
     const config = new client.Configuration(
       {
-        issuer: PROVIDER_ORIGINS.github,
+        issuer: 'https://github.com',
         authorization_endpoint: 'https://github.com/login/oauth/authorize',
         token_endpoint: 'https://github.com/login/oauth/access_token',
         response_types_supported: ['code'],
@@ -150,11 +152,6 @@ export class OAuthProviders {
         throw new IdentityError('Invalid Google identity');
       return { subject: claims.sub, email: verifiedEmail(claims.email) };
     }
-    const headers = new Headers({
-      accept: 'application/vnd.github+json',
-      'x-github-api-version': '2026-03-10',
-      'user-agent': 'pgstencil',
-    });
     const resource = async (url: string) => {
       const response = await client.fetchProtectedResource(
         config,
@@ -162,12 +159,20 @@ export class OAuthProviders {
         new URL(url),
         'GET',
         undefined,
-        headers,
+        GITHUB_HEADERS,
       );
       if (!response.ok) throw new Error('GitHub identity request failed');
       return (await response.json()) as unknown;
     };
-    const profile = object(await resource('https://api.github.com/user'));
+    const emailPage = (page: number) =>
+      resource(`https://api.github.com/user/emails?per_page=100&page=${page}`);
+    // The profile and the first page of addresses depend only on the access
+    // token, so one round trip serves both.
+    const [profileResponse, firstPage] = await Promise.all([
+      resource('https://api.github.com/user'),
+      emailPage(1),
+    ]);
+    const profile = object(profileResponse);
     if (
       typeof profile.id !== 'number' ||
       !Number.isSafeInteger(profile.id) ||
@@ -177,9 +182,7 @@ export class OAuthProviders {
     // /user.email may be null, public, or stale. The authenticated email list
     // explicitly identifies the verified primary address, including private ones.
     for (let page = 1; page <= 10; page++) {
-      const addresses = await resource(
-        `https://api.github.com/user/emails?per_page=100&page=${page}`,
-      );
+      const addresses = page === 1 ? firstPage : await emailPage(page);
       if (!Array.isArray(addresses))
         throw new IdentityError('Invalid GitHub email response');
       for (const value of addresses) {

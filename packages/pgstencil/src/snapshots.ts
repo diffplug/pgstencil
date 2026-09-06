@@ -22,13 +22,13 @@ export function stableJson(value: unknown): string {
     ) + '\n'
   );
 }
+const CANONICAL_ORIGIN = 'https://pgstencil.test';
+const CANONICAL_ORIGIN_ENCODED = encodeURIComponent(CANONICAL_ORIGIN);
+/** Also rewrites the origin where an app embeds it in a query parameter. */
 export function normalizeOrigin(text: string, origin: string): string {
   return text
-    .replaceAll(origin, 'https://pgstencil.test')
-    .replaceAll(
-      encodeURIComponent(origin),
-      encodeURIComponent('https://pgstencil.test'),
-    );
+    .replaceAll(origin, CANONICAL_ORIGIN)
+    .replaceAll(encodeURIComponent(origin), CANONICAL_ORIGIN_ENCODED);
 }
 export function htmlToMarkdown(html: string): string {
   const $ = load(html);

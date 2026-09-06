@@ -25,22 +25,22 @@ type AppOptions = Pick<
   AppConfig,
   'oauth' | 'oauthFetch' | 'publicOrigin' | 'secureCookies'
 >;
-export async function fixture(
-  options: { seed?: string; email?: EmailSender } & AppOptions = {},
-) {
-  const context = await createTestContext(
-    options.seed ? { seed: options.seed } : {},
-  );
+export async function fixture({
+  seed,
+  email,
+  ...options
+}: { seed?: string; email?: EmailSender } & AppOptions = {}) {
+  const context = await createTestContext(seed ? { seed } : {});
   try {
     const app = await startApp({
       databaseUrl: context.database.url,
       time: context.time,
       random: context.random,
-      email: options.email ?? context.email,
+      email: email ?? context.email,
       devInbox: context.email,
       secret: SECRET,
       development: true,
-      ...appOptions(options),
+      ...options,
     });
     return {
       ...context,
@@ -93,19 +93,6 @@ export async function secondApp(
     },
   };
 }
-function appOptions({
-  oauth,
-  oauthFetch,
-  publicOrigin,
-  secureCookies,
-}: AppOptions): AppOptions {
-  return {
-    ...(oauth === undefined ? {} : { oauth }),
-    ...(oauthFetch === undefined ? {} : { oauthFetch }),
-    ...(publicOrigin === undefined ? {} : { publicOrigin }),
-    ...(secureCookies === undefined ? {} : { secureCookies }),
-  };
-}
 export function field(html: string, name: string): string {
   const match = html.match(new RegExp(`name="${name}" value="([^"]*)"`));
   if (!match) throw new Error(`Missing field ${name}`);
@@ -120,6 +107,11 @@ export function codeFrom(message: { text: string }): string {
   const match = message.text.match(/code is (\d{4}) (\d{4})/);
   if (!match) throw new Error('No sign-in code in email');
   return match.slice(1).join('');
+}
+export function sessionCookie(f: Fixture, response: request.Response): string {
+  return cookies(response)
+    .split('; ')
+    .find((c) => c.startsWith(`${f.app.sessionName}=`))!;
 }
 export function post(
   target: LoginTarget,
@@ -154,11 +146,5 @@ export async function login(f: Fixture) {
     { csrf: flow.csrf, code: flow.code },
     flow.pendingCookie,
   ).expect(303);
-  return {
-    ...flow,
-    response,
-    sessionCookie: cookies(response)
-      .split('; ')
-      .find((c) => c.startsWith(`${f.app.sessionName}=`))!,
-  };
+  return { ...flow, response, sessionCookie: sessionCookie(f, response) };
 }

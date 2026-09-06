@@ -19,6 +19,7 @@ export interface AuthDependencies {
   secret: string;
   origin: string;
 }
+export type SessionRow = Selectable<Sessions> & { email: string };
 export interface Pending {
   flow: Selectable<LoginFlows>;
   csrf: string;
@@ -35,17 +36,18 @@ export class Auth {
     if (deps.secret.length < 32)
       throw new Error('Auth secret must contain at least 32 characters');
   }
-  private csrf(purpose: string, value: string): string {
+  /** Secret-derived, purpose-separated value. Keeps the raw secret in Auth. */
+  derive(purpose: string, value: string): string {
     return keyed(this.deps.secret, purpose, value);
   }
   sessionCsrf(raw: string): string {
-    return this.csrf('session-csrf', raw);
+    return this.derive('session-csrf', raw);
   }
   async newFlow(): Promise<Pending> {
     const { db, random, time } = this.deps;
     const id = token(random, 16);
     const binding = token(random);
-    const csrf = this.csrf('flow-csrf', binding);
+    const csrf = this.derive('flow-csrf', binding);
     const now = time.now();
     const flow = await db
       .insertInto('login_flows')
@@ -77,7 +79,7 @@ export class Auth {
       !equalDigest(flow.binding_hash, digest(binding))
     )
       return;
-    return { flow, csrf: this.csrf('flow-csrf', binding), cookie };
+    return { flow, csrf: this.derive('flow-csrf', binding), cookie };
   }
   validCsrf(pending: Pending, csrf: string): boolean {
     return equalDigest(pending.flow.csrf_hash, digest(csrf));
@@ -347,18 +349,35 @@ export class Auth {
         this.rate(trx, [{ key: `oauth:ip:${source}`, limit: 30 }]),
       );
   }
-  async session(
-    raw: string | undefined,
-  ): Promise<(Selectable<Sessions> & { email: string }) | undefined> {
-    if (!raw) return;
-    return this.deps.db
+  private sessionQuery(
+    executor: Kysely<DB> | Transaction<DB>,
+    tokenHash: string,
+  ) {
+    return executor
       .selectFrom('sessions')
       .innerJoin('users', 'users.id', 'sessions.user_id')
       .selectAll('sessions')
       .select('users.email')
-      .where('token_hash', '=', digest(raw))
+      .where('token_hash', '=', tokenHash);
+  }
+  /** True while a session may still authenticate a request. */
+  live(session: Selectable<Sessions>): boolean {
+    return !session.revoked_at && session.expires_at > this.deps.time.now();
+  }
+  async session(raw: string | undefined): Promise<SessionRow | undefined> {
+    if (!raw) return;
+    return this.sessionQuery(this.deps.db, digest(raw))
       .where('revoked_at', 'is', null)
       .where('expires_at', '>', this.deps.time.now())
+      .executeTakeFirst();
+  }
+  /** Row-locked read for callers that must decide and write in one transaction. */
+  async lockedSession(
+    trx: Transaction<DB>,
+    tokenHash: string,
+  ): Promise<SessionRow | undefined> {
+    return this.sessionQuery(trx, tokenHash)
+      .forUpdate('sessions')
       .executeTakeFirst();
   }
   async logout(raw: string): Promise<void> {

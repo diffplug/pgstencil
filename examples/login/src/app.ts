@@ -12,7 +12,7 @@ import {
   type EmailSender,
   type EmailDev,
 } from 'pgstencil';
-import { Auth } from './auth.ts';
+import { Auth, SESSION_MS } from './auth.ts';
 import type { DB } from './db.generated.ts';
 import {
   cookieValues,
@@ -28,7 +28,7 @@ import {
   confirmPage,
   accountPage,
   sendFailurePage,
-  escape,
+  errorMessage,
 } from './views.ts';
 import { devInboxRoutes } from './dev-inbox.ts';
 import { OAuth } from './oauth.ts';
@@ -36,7 +36,6 @@ import {
   OAuthProviders,
   PROVIDER_LABELS,
   PROVIDER_ORIGINS,
-  isProvider,
   type OAuthSettings,
   type OAuthFetch,
 } from './oauth-providers.ts';
@@ -57,6 +56,8 @@ export interface AppConfig {
   oauthFetch?: OAuthFetch;
 }
 const MAX_BODY_BYTES = 8192;
+const OAUTH_ROUTE = /^\/oauth\/([^/]+)\/(start|connect|callback)$/;
+type OAuthAction = 'start' | 'connect' | 'callback';
 // Every instance serves the same stylesheet: read it once per process.
 let stylesheet: Promise<string> | undefined;
 export async function startApp(config: AppConfig) {
@@ -115,6 +116,9 @@ export async function startApp(config: AppConfig) {
       label: PROVIDER_LABELS[id],
     }));
     const oauthName = secure ? '__Host-pgstencil-oauth' : 'pgstencil_oauth';
+    const contentSecurityPolicy = `default-src 'none'; style-src 'self'; form-action 'self'${oauth.providers.enabled
+      .map((provider) => ` ${PROVIDER_ORIGINS[provider]}`)
+      .join('')}; base-uri 'none'; frame-ancestors 'none'`;
     const sessionName = secure ? '__Host-pgstencil' : 'pgstencil_dev';
     const pendingName = secure
       ? '__Host-pgstencil-pending'
@@ -156,23 +160,22 @@ export async function startApp(config: AppConfig) {
       // preserves CSRF origin checks while never disclosing paths/link tokens.
       res.setHeader('referrer-policy', 'strict-origin');
       res.setHeader('x-content-type-options', 'nosniff');
-      res.setHeader(
-        'content-security-policy',
-        `default-src 'none'; style-src 'self'; form-action 'self'${oauth.providers.enabled.map((provider) => ` ${PROVIDER_ORIGINS[provider]}`).join('')}; base-uri 'none'; frame-ancestors 'none'`,
-      );
+      res.setHeader('content-security-policy', contentSecurityPolicy);
       const url = new URL(req.url ?? '/', origin);
+      // The static asset answers before any cookie or route parsing.
+      if (req.method === 'GET' && url.pathname === '/style.css') {
+        res.setHeader('content-type', 'text/css; charset=utf-8');
+        res.end(css);
+        return;
+      }
       const cookies = cookieValues(req.headers.cookie);
       const rawSession = cookies[sessionName];
-      const oauthRoute = url.pathname.match(
-        /^\/oauth\/([^/]+)\/(start|connect|callback)$/,
-      );
-      const provider =
-        oauthRoute &&
-        isProvider(oauthRoute[1]!) &&
-        oauth.providers.enabled.includes(oauthRoute[1])
-          ? oauthRoute[1]
-          : undefined;
-      if (oauthRoute && !provider) {
+      const oauthMatch = OAUTH_ROUTE.exec(url.pathname);
+      const provider = oauthMatch
+        ? oauth.providers.enabled.find((id) => id === oauthMatch[1])
+        : undefined;
+      const action = oauthMatch?.[2] as OAuthAction | undefined;
+      if (oauthMatch && !provider) {
         fail(
           res,
           404,
@@ -181,7 +184,7 @@ export async function startApp(config: AppConfig) {
         );
         return;
       }
-      if (req.method === 'GET' && provider && oauthRoute?.[2] === 'callback') {
+      if (req.method === 'GET' && provider && action === 'callback') {
         const { result, clearCookie } = await oauth.complete(
           provider,
           url,
@@ -190,31 +193,22 @@ export async function startApp(config: AppConfig) {
         );
         if (clearCookie) setCookie(res, oauthName, '', 0);
         if (result.ok) {
-          setCookie(res, sessionName, result.session, 24 * 60 * 60);
+          setCookie(res, sessionName, result.session, SESSION_MS / 1000);
           setCookie(res, pendingName, '', 0);
           redirect(res, '/account');
-        } else {
-          send(
+        } else
+          fail(
             res,
             result.status,
-            page(
-              'Sign-in not completed.',
-              `<p class="error" role="alert">${escape(result.message)}</p><div class="recovery"><a href="/login">Return to sign-in</a><a href="/account">Return to account</a></div>`,
-              showInbox,
-            ),
+            'Sign-in not completed.',
+            `${errorMessage(result.message)}<div class="recovery"><a href="/login">Return to sign-in</a><a href="/account">Return to account</a></div>`,
           );
-        }
         return;
       }
       // Only the routes below that need a flow pay for the lookup, and only once.
       let pendingFlow: ReturnType<Auth['pending']> | undefined;
       const getPending = () =>
         (pendingFlow ??= auth.pending(cookies[pendingName]));
-      if (req.method === 'GET' && url.pathname === '/style.css') {
-        res.setHeader('content-type', 'text/css; charset=utf-8');
-        res.end(css);
-        return;
-      }
       if (req.method === 'GET' && url.pathname === '/') {
         redirect(res, '/login');
         return;
@@ -222,7 +216,7 @@ export async function startApp(config: AppConfig) {
       if (req.method === 'GET' && url.pathname === '/login') {
         const flow = await auth.newFlow();
         setCookie(res, pendingName, flow.cookie, 30 * 60);
-        send(res, 200, loginPage(flow.csrf, showInbox, undefined, methods));
+        send(res, 200, loginPage(flow.csrf, showInbox, methods));
         return;
       }
       if (req.method === 'GET' && url.pathname === '/account') {
@@ -327,11 +321,8 @@ export async function startApp(config: AppConfig) {
         const form = new URLSearchParams(body);
         const csrf = form.get('csrf') ?? '';
         const source = req.socket.remoteAddress ?? 'unknown';
-        if (
-          provider &&
-          (oauthRoute?.[2] === 'start' || oauthRoute?.[2] === 'connect')
-        ) {
-          const linking = oauthRoute[2] === 'connect';
+        if (provider && (action === 'start' || action === 'connect')) {
+          const linking = action === 'connect';
           const session = linking ? await auth.session(rawSession) : undefined;
           const pending = linking ? undefined : await getPending();
           const valid = linking
@@ -352,14 +343,11 @@ export async function startApp(config: AppConfig) {
               setCookie(res, oauthName, result.cookie, result.seconds);
               redirect(res, result.url);
             } else
-              send(
+              fail(
                 res,
                 result.status,
-                page(
-                  'Sign-in not started.',
-                  `<p class="error" role="alert">${escape(result.message)}</p><a href="/login">Return to sign-in</a>`,
-                  showInbox,
-                ),
+                'Sign-in not started.',
+                `${errorMessage(result.message)}<a href="/login">Return to sign-in</a>`,
               );
           } catch {
             fail(
@@ -410,8 +398,8 @@ export async function startApp(config: AppConfig) {
               loginPage(
                 pending.csrf,
                 showInbox,
-                'Enter a valid email address.',
                 methods,
+                'Enter a valid email address.',
               ),
             );
             return;
@@ -437,7 +425,7 @@ export async function startApp(config: AppConfig) {
             rawSession,
           );
           if (result.ok) {
-            setCookie(res, sessionName, result.session, 24 * 60 * 60);
+            setCookie(res, sessionName, result.session, SESSION_MS / 1000);
             setCookie(res, pendingName, '', 0);
             redirect(res, '/account');
           } else

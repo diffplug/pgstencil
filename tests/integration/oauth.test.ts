@@ -7,6 +7,7 @@ import {
   post,
   cookies,
   field,
+  sessionCookie,
   type Fixture,
   type LoginTarget,
 } from './helpers.ts';
@@ -16,6 +17,7 @@ import {
   type GrantOptions,
 } from '../support/oauth-server.ts';
 import type { Provider } from '../../examples/login/src/oauth-providers.ts';
+import { CONNECT_FRESH_MS, OAUTH_MS } from '../../examples/login/src/oauth.ts';
 import {
   captureResponse,
   stableJson,
@@ -64,19 +66,10 @@ async function start(
     cookie: [cookies(response), session].filter(Boolean).join('; '),
   };
 }
-function callback(
-  f: LoginTarget & { app: { origin: string } },
-  url: URL,
-  cookie?: string,
-) {
+function callback(f: { app: { origin: string } }, url: URL, cookie?: string) {
   // A fresh client prevents its real-clock cookie jar from obscuring DevTime checks.
   const req = request(f.app.origin).get(url.pathname + url.search);
   return cookie ? req.set('Cookie', cookie) : req;
-}
-function sessionCookie(f: Fixture, response: request.Response) {
-  return cookies(response)
-    .split('; ')
-    .find((c) => c.startsWith(`${f.app.sessionName}=`))!;
 }
 async function signIn(
   f: Fixture,
@@ -102,13 +95,15 @@ oauthTest.for(['google', 'github'] as const)(
       .get('/account')
       .set('Cookie', session)
       .expect(200);
+    const loginCapture = captureResponse(flow.page, f.origin);
+    const accountCapture = captureResponse(account, f.origin);
     const snapshots = {
-      'login.html': captureResponse(flow.page, f.origin).html,
-      'login.md': captureResponse(flow.page, f.origin).markdown,
+      'login.html': loginCapture.html,
+      'login.md': loginCapture.markdown,
       'start-http.json': captureResponse(flow.response, f.origin).http,
       'callback-http.json': captureResponse(response, f.origin).http,
-      'account.html': captureResponse(account, f.origin).html,
-      'account.md': captureResponse(account, f.origin).markdown,
+      'account.html': accountCapture.html,
+      'account.md': accountCapture.markdown,
       'database.json': stableJson({
         users: await f.app.db.selectFrom('users').selectAll().execute(),
         identities: await f.app.db
@@ -128,11 +123,12 @@ oauthTest.for(['google', 'github'] as const)(
       .selectFrom('oauth_flows')
       .selectAll()
       .executeTakeFirstOrThrow();
+    const storedJson = stableJson(stored);
     expect(stored.consumed_at).toEqual(f.time.now());
-    expect(stableJson(stored)).not.toContain(
+    expect(storedJson).not.toContain(
       flow.authorization.searchParams.get('state'),
     );
-    expect(stableJson(stored)).not.toContain(flow.cookie.split('=')[1]);
+    expect(storedJson).not.toContain(flow.cookie.split('=')[1]);
     expect(stableJson(snapshots)).not.toMatch(
       /test-google-secret|test-github-secret|mock-access-/,
     );
@@ -200,7 +196,7 @@ oauthTest(
   },
 );
 
-oauthTest.for([599999, 600000])(
+oauthTest.for([OAUTH_MS - 1, OAUTH_MS])(
   'attempt boundary at %i milliseconds',
   async (milliseconds, { f, providerServer }) => {
     const flow = await start(f);
@@ -209,7 +205,7 @@ oauthTest.for([599999, 600000])(
       f,
       providerServer.authorize('google', flow.authorization),
       flow.cookie,
-    ).expect(milliseconds < 600000 ? 303 : 400);
+    ).expect(milliseconds < OAUTH_MS ? 303 : 400);
   },
 );
 
@@ -326,7 +322,7 @@ oauthTest.for([
   const flow = await start(f, 'github', email.sessionCookie);
   if (reason === 'revoked-session')
     await f.app.auth.logout(email.sessionCookie.split('=')[1]!);
-  if (reason === 'stale-session') f.time.advanceMilliseconds(300000);
+  if (reason === 'stale-session') f.time.advanceMilliseconds(CONNECT_FRESH_MS);
   const cookie =
     reason === 'missing-session' ? flow.cookie.split('; ')[0] : flow.cookie;
   await callback(
@@ -353,7 +349,7 @@ oauthTest(
       .get('/account')
       .set('Cookie', email.sessionCookie)
       .expect(200);
-    f.time.advanceMilliseconds(300000);
+    f.time.advanceMilliseconds(CONNECT_FRESH_MS);
     await post(
       f,
       '/oauth/google/connect',
@@ -486,7 +482,7 @@ test('an attempt that expires during token exchange cannot create a session', as
     oauth: oauthCredentials,
     oauthFetch: async (input, init) => {
       const response = await server.transport(input, init);
-      if (init.method === 'POST') f.time.advanceMilliseconds(600000);
+      if (init.method === 'POST') f.time.advanceMilliseconds(OAUTH_MS);
       return response;
     },
   });

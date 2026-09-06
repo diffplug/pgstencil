@@ -1,18 +1,26 @@
-import { sql } from 'kysely';
+import { sql, type Transaction } from 'kysely';
 import { token } from 'pgstencil';
-import { Auth, type AuthResult, type AuthFailure } from './auth.ts';
-import { digest, keyed } from './security.ts';
+import {
+  Auth,
+  type AuthResult,
+  type AuthFailure,
+  type SessionRow,
+} from './auth.ts';
+import type { DB, OauthFlows } from './db.generated.ts';
+import type { Selectable } from 'kysely';
+import { digest } from './security.ts';
 import {
   OAuthProviders,
   PROVIDER_LABELS,
   IdentityError,
   type Provider,
   type OAuthProof,
+  type ProviderIdentity,
 } from './oauth-providers.ts';
 
 export const OAUTH_MS = 10 * 60_000;
 export const CONNECT_FRESH_MS = 5 * 60_000;
-type Session = NonNullable<Awaited<ReturnType<Auth['session']>>>;
+type Session = SessionRow;
 const failure = (message: string, status = 400): AuthFailure => ({
   ok: false,
   status,
@@ -20,6 +28,8 @@ const failure = (message: string, status = 400): AuthFailure => ({
 });
 const unavailable = () =>
   failure('This sign-in attempt is invalid or has expired. Start again.');
+const reconnect = () =>
+  failure('Sign in again before connecting another sign-in method.', 403);
 
 export class OAuth {
   constructor(
@@ -32,19 +42,14 @@ export class OAuth {
     return {
       state,
       redirectUri,
-      verifier: keyed(this.auth.deps.secret, 'oauth-pkce', state),
-      nonce: keyed(this.auth.deps.secret, 'oauth-nonce', state),
+      verifier: this.auth.derive('oauth-pkce', state),
+      nonce: this.auth.derive('oauth-nonce', state),
     };
   }
   private fresh(session: Session): boolean {
-    const now = this.auth.deps.time.now();
-    const age = now.getTime() - session.created_at.getTime();
-    return (
-      !session.revoked_at &&
-      session.expires_at > now &&
-      age >= 0 &&
-      age < CONNECT_FRESH_MS
-    );
+    const age =
+      this.auth.deps.time.now().getTime() - session.created_at.getTime();
+    return this.auth.live(session) && age >= 0 && age < CONNECT_FRESH_MS;
   }
   async begin(
     provider: Provider,
@@ -53,11 +58,7 @@ export class OAuth {
   ): Promise<
     AuthFailure | { ok: true; url: string; cookie: string; seconds: number }
   > {
-    if (linking && !this.fresh(linking))
-      return failure(
-        'Sign in again before connecting another sign-in method.',
-        403,
-      );
+    if (linking && !this.fresh(linking)) return reconnect();
     if (!(await this.auth.allowOAuthStart(source)))
       return failure('Too many sign-in attempts. Please try again later.', 429);
     const { random, time, db, origin } = this.auth.deps;
@@ -100,6 +101,87 @@ export class OAuth {
       ),
     };
   }
+  /** Maps a verified provider identity to the account it may sign into. */
+  private async resolveUser(
+    trx: Transaction<DB>,
+    provider: Provider,
+    flow: Selectable<OauthFlows>,
+    identity: ProviderIdentity,
+    now: Date,
+  ): Promise<{ userId: string } | AuthFailure> {
+    const { random } = this.auth.deps;
+    const existing = await trx
+      .selectFrom('oauth_identities')
+      .select('user_id')
+      .where('provider', '=', provider)
+      .where('subject', '=', identity.subject)
+      .executeTakeFirst();
+    if (flow.link_user_id && flow.link_session_hash) {
+      const session = await this.auth.lockedSession(
+        trx,
+        flow.link_session_hash,
+      );
+      if (
+        !session ||
+        session.user_id !== flow.link_user_id ||
+        !this.fresh(session)
+      )
+        return reconnect();
+      if (session.email !== identity.email)
+        return failure(
+          'The provider must verify the same email address as your account.',
+          403,
+        );
+      if (existing && existing.user_id !== session.user_id)
+        return failure(
+          'This provider account is already connected to another account.',
+          409,
+        );
+      if (!existing) {
+        const connected = await trx
+          .insertInto('oauth_identities')
+          .values({
+            provider,
+            subject: identity.subject,
+            user_id: session.user_id,
+            created_at: now,
+          })
+          .onConflict((c) => c.doNothing())
+          .returning('user_id')
+          .executeTakeFirst();
+        if (!connected)
+          return failure(
+            'A different account from this provider is already connected.',
+            409,
+          );
+      }
+      return { userId: session.user_id };
+    }
+    // A changed email/handle must never change which account a stable
+    // provider identity signs into, or silently update its recovery email.
+    if (existing) return { userId: existing.user_id };
+    const user = await trx
+      .insertInto('users')
+      .values({ id: token(random, 16), email: identity.email, created_at: now })
+      .onConflict((c) => c.column('email').doNothing())
+      .returning('id')
+      .executeTakeFirst();
+    if (!user)
+      return failure(
+        'This email already has an account. Sign in with email or an existing method, then connect this provider from your account.',
+        409,
+      );
+    await trx
+      .insertInto('oauth_identities')
+      .values({
+        provider,
+        subject: identity.subject,
+        user_id: user.id,
+        created_at: now,
+      })
+      .execute();
+    return { userId: user.id };
+  }
   async complete(
     provider: Provider,
     callback: URL,
@@ -137,9 +219,7 @@ export class OAuth {
       flow.link_session_hash &&
       (!rawSession || digest(rawSession) !== flow.link_session_hash)
     )
-      return done(
-        failure('Sign in again before connecting another sign-in method.', 403),
-      );
+      return done(reconnect());
     try {
       const identity = await this.providers.identity(
         provider,
@@ -154,94 +234,22 @@ export class OAuth {
           );
           const now = time.now();
           if (flow.expires_at <= now) return unavailable();
-          const existing = await trx
-            .selectFrom('oauth_identities')
-            .select('user_id')
-            .where('provider', '=', provider)
-            .where('subject', '=', identity.subject)
-            .executeTakeFirst();
-          let userId: string;
-          if (flow.link_user_id && flow.link_session_hash) {
-            const session = await trx
-              .selectFrom('sessions')
-              .innerJoin('users', 'users.id', 'sessions.user_id')
-              .selectAll('sessions')
-              .select('users.email')
-              .where('token_hash', '=', flow.link_session_hash)
-              .forUpdate('sessions')
-              .executeTakeFirst();
-            if (
-              !session ||
-              session.user_id !== flow.link_user_id ||
-              !this.fresh(session)
-            )
-              return failure(
-                'Sign in again before connecting another sign-in method.',
-                403,
-              );
-            if (session.email !== identity.email)
-              return failure(
-                'The provider must verify the same email address as your account.',
-                403,
-              );
-            if (existing && existing.user_id !== session.user_id)
-              return failure(
-                'This provider account is already connected to another account.',
-                409,
-              );
-            userId = session.user_id;
-            if (!existing) {
-              const connected = await trx
-                .insertInto('oauth_identities')
-                .values({
-                  provider,
-                  subject: identity.subject,
-                  user_id: userId,
-                  created_at: now,
-                })
-                .onConflict((c) => c.doNothing())
-                .returning('user_id')
-                .executeTakeFirst();
-              if (!connected)
-                return failure(
-                  'A different account from this provider is already connected.',
-                  409,
-                );
-            }
-          } else if (existing) {
-            // A changed email/handle must never change which account a stable
-            // provider identity signs into, or silently update its recovery email.
-            userId = existing.user_id;
-          } else {
-            const user = await trx
-              .insertInto('users')
-              .values({
-                id: token(random, 16),
-                email: identity.email,
-                created_at: now,
-              })
-              .onConflict((c) => c.column('email').doNothing())
-              .returning('id')
-              .executeTakeFirst();
-            if (!user)
-              return failure(
-                'This email already has an account. Sign in with email or an existing method, then connect this provider from your account.',
-                409,
-              );
-            userId = user.id;
-            await trx
-              .insertInto('oauth_identities')
-              .values({
-                provider,
-                subject: identity.subject,
-                user_id: userId,
-                created_at: now,
-              })
-              .execute();
-          }
+          const resolved = await this.resolveUser(
+            trx,
+            provider,
+            flow,
+            identity,
+            now,
+          );
+          if ('ok' in resolved) return resolved;
           return {
             ok: true,
-            session: await this.auth.issueSession(trx, userId, rawSession, now),
+            session: await this.auth.issueSession(
+              trx,
+              resolved.userId,
+              rawSession,
+              now,
+            ),
           };
         });
       return done(result);

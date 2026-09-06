@@ -64,8 +64,8 @@ function providerForms(
 export function loginPage(
   csrf: string,
   showInbox: boolean,
+  providers: readonly SignInMethod[],
   message?: string,
-  providers: readonly SignInMethod[] = [],
 ): string {
   return page(
     'Welcome in.',
@@ -118,7 +118,7 @@ export function accountPage(
   account: { email: string; created_at: Date; expires_at: Date },
   csrf: string,
   showInbox: boolean,
-  providers: readonly SignInMethod[] = [],
+  providers: readonly SignInMethod[],
 ): string {
   return page(
     'You’re signed in.',

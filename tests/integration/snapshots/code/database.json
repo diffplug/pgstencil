@@ -1,0 +1,19 @@
+{
+  "sessions": [
+    {
+      "created_at": "2020-01-01T00:00:00.000Z",
+      "csrf_hash": "8f78244e71717c54f09469f215a1a0987de1a0dfb78539dadc5fbcb643e65fcd",
+      "expires_at": "2020-01-02T00:00:00.000Z",
+      "revoked_at": null,
+      "token_hash": "8bd56f10b6f3285fcd2e2326eb162c96329b7d43f9fcbc3c41b136f111e468d5",
+      "user_id": "Va8eN8Q3_3xqMF9Im1yUvg"
+    }
+  ],
+  "users": [
+    {
+      "created_at": "2020-01-01T00:00:00.000Z",
+      "email": "alice@example.test",
+      "id": "Va8eN8Q3_3xqMF9Im1yUvg"
+    }
+  ]
+}

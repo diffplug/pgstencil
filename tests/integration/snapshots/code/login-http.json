@@ -1,0 +1,14 @@
+{
+  "headers": {
+    "cache-control": "no-store",
+    "content-security-policy": "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "location": "/account",
+    "referrer-policy": "no-referrer",
+    "set-cookie": [
+      "pgstencil_dev=3y4wQIhhO3kYhCYSR3zHV1n2dF9NwPNFWAXLMzpsysk; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400; Expires=Thu, 02 Jan 2020 00:00:00 GMT",
+      "pgstencil_pending=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+    ],
+    "x-content-type-options": "nosniff"
+  },
+  "status": 303
+}

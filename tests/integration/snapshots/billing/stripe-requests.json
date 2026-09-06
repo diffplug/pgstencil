@@ -1,0 +1,33 @@
+[
+  {
+    "body": {
+      "email": "alice@example.test",
+      "metadata[pgstencil_owner]": "Va8eN8Q3_3xqMF9Im1yUvg"
+    },
+    "key": "BIZx0gY6Ur5oTY5h3enuOI3gzKoI6dvASZhrrIYx7zA",
+    "method": "POST",
+    "path": "/v1/customers"
+  },
+  {
+    "body": {
+      "cancel_url": "<origin>/billing",
+      "client_reference_id": "Va8eN8Q3_3xqMF9Im1yUvg",
+      "customer": "cus_coH1oXmUHUAvwrZs",
+      "expires_at": "1577840400",
+      "line_items[0][price]": "price_dev_yearly",
+      "line_items[0][quantity]": "1",
+      "metadata[pgstencil_operation]": "nh6LvhIPrrm-MNZdruKyJF6UKMs6w2sRh2V87wsKWt8",
+      "mode": "subscription",
+      "payment_method_collection": "always",
+      "payment_method_types[0]": "card",
+      "subscription_data[metadata][pgstencil_operation]": "nh6LvhIPrrm-MNZdruKyJF6UKMs6w2sRh2V87wsKWt8",
+      "subscription_data[metadata][pgstencil_owner]": "Va8eN8Q3_3xqMF9Im1yUvg",
+      "subscription_data[trial_period_days]": "14",
+      "subscription_data[trial_settings][end_behavior][missing_payment_method]": "cancel",
+      "success_url": "<origin>/billing?checkout=nh6LvhIPrrm-MNZdruKyJF6UKMs6w2sRh2V87wsKWt8"
+    },
+    "key": "nh6LvhIPrrm-MNZdruKyJF6UKMs6w2sRh2V87wsKWt8",
+    "method": "POST",
+    "path": "/v1/checkout/sessions"
+  }
+]

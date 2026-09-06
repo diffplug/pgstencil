@@ -184,7 +184,7 @@ export class Billing {
           session_id: null,
           url: null,
           created_at: this.time.now(),
-          expires_at: new Date(this.time.now().getTime() + 30 * 60000),
+          expires_at: new Date(this.time.now().getTime() + 60 * 60000),
         })
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -252,7 +252,7 @@ export class Billing {
       await this.confirmCheckout(ownerId, operation.id);
       throw new BillingError('Checkout is complete. Refresh billing.');
     }
-    return { id: operation.id, url: operation.url! };
+    return { id: operation.id, url: session.url ?? operation.url! };
   }
   async cancelCheckout(ownerId: string): Promise<void> {
     const operation = await this.db

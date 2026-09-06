@@ -1,10 +1,22 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  mkdirSync,
+} from 'node:fs';
+import { dirname } from 'node:path';
 import { token, type Time, type RandomSource } from 'pgstencil';
 import { Stripe, STRIPE_API_VERSION } from './index.ts';
 
 /** Stateful, local Stripe substitute. Uses the real SDK and webhook signatures. */
-export async function createStripeDev(time: Time, random: RandomSource) {
+export async function createStripeDev(
+  time: Time,
+  random: RandomSource,
+  statePath?: string,
+) {
   const customers = new Map<string, Record<string, unknown>>();
   const checkouts = new Map<string, Stripe.Checkout.Session>();
   const subscriptions = new Map<string, Stripe.Subscription>();
@@ -18,6 +30,34 @@ export async function createStripeDev(time: Time, random: RandomSource) {
   }[] = [];
   const events: Stripe.Event[] = [];
   const failures = new Map<string, { afterCommit: boolean }>();
+  if (statePath && existsSync(statePath)) {
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    for (const [key, value] of state.customers) customers.set(key, value);
+    for (const [key, value] of state.checkouts) checkouts.set(key, value);
+    for (const [key, value] of state.subscriptions)
+      subscriptions.set(key, value);
+    for (const [key, value] of state.parameters)
+      parameters.set(key, new URLSearchParams(value));
+    for (const [key, value] of state.idempotency) idempotency.set(key, value);
+    events.push(...state.events);
+  }
+  function save() {
+    if (!statePath) return;
+    mkdirSync(dirname(statePath), { recursive: true });
+    writeFileSync(
+      `${statePath}.tmp`,
+      JSON.stringify({
+        customers: [...customers],
+        checkouts: [...checkouts],
+        subscriptions: [...subscriptions],
+        parameters: [...parameters].map(([k, v]) => [k, v.toString()]),
+        idempotency: [...idempotency],
+        events,
+      }),
+      { mode: 0o600 },
+    );
+    renameSync(`${statePath}.tmp`, statePath);
+  }
   const prices = { monthly: 'price_dev_monthly', yearly: 'price_dev_yearly' };
   const webhookSecret = 'whsec_pgstencil_local_only';
   let origin = '';
@@ -90,6 +130,7 @@ export async function createStripeDev(time: Time, random: RandomSource) {
     session.payment_status = days ? 'no_payment_required' : 'paid';
     event('checkout.session.completed', session);
     event('customer.subscription.created', sub);
+    save();
     return sub;
   }
   function transition(
@@ -108,12 +149,14 @@ export async function createStripeDev(time: Time, random: RandomSource) {
         sub.items.data[0]!.price.id,
       );
     }
-    return event(
+    const result = event(
       action === 'cancel'
         ? 'customer.subscription.deleted'
         : 'customer.subscription.updated',
       sub,
     );
+    save();
+    return result;
   }
   const server = createServer(async (req, res) => {
     try {
@@ -137,9 +180,17 @@ export async function createStripeDev(time: Time, random: RandomSource) {
           }
           completeCheckout(session.id);
           if (webhookTarget) await deliver(webhookTarget);
+          const success = new URL(
+            parameters.get(session.id)!.get('success_url')!,
+          );
+          if (webhookTarget) {
+            const target = new URL(webhookTarget);
+            success.protocol = target.protocol;
+            success.host = target.host;
+          }
           res
             .writeHead(303, {
-              location: parameters.get(session.id)!.get('success_url')!,
+              location: success.href,
             })
             .end();
         } else {
@@ -224,6 +275,7 @@ export async function createStripeDev(time: Time, random: RandomSource) {
           session.status = 'expired';
         } else if (session.status === 'open' && session.expires_at <= seconds())
           session.status = 'expired';
+        session.url = `${origin}/checkout/${session.id}`;
         result = session;
       } else if (path === '/v1/subscriptions' && req.method === 'GET') {
         result = {
@@ -255,6 +307,7 @@ export async function createStripeDev(time: Time, random: RandomSource) {
           input: raw,
           result: structuredClone(result),
         });
+      save();
       if (failure?.afterCommit) {
         res
           .writeHead(503, {
@@ -315,6 +368,7 @@ export async function createStripeDev(time: Time, random: RandomSource) {
       if (!response.ok)
         throw new Error(`Webhook delivery failed: ${response.status}`);
       events.shift();
+      save();
     }
   }
   return {

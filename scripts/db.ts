@@ -21,6 +21,8 @@ import {
   stateDirectory,
   type Services,
 } from '../packages/pgstencil/src/database.ts';
+import { billingMigrations } from '../packages/stripe/src/migrations.ts';
+const migrations = [defaultMigrations, billingMigrations];
 const exec = promisify(execFile);
 const command = process.argv[2];
 const statePath = join(stateDirectory, 'services.json');
@@ -47,7 +49,7 @@ if (command === 'create') {
   const label = process.argv[3];
   if (!label || !/^[a-z][a-z0-9_]*$/.test(label))
     throw new Error('Supply a snake_case migration name');
-  const files = await readMigrations(defaultMigrations);
+  const files = await readMigrations(migrations);
   const next = String(
     Math.max(...files.map((f) => Number(f.name.split('_')[0]))) + 1,
   ).padStart(3, '0');
@@ -63,7 +65,7 @@ if (command === 'create') {
 ) {
   // One lease covers both generators; `verify` checks each is up to date.
   const verify = command === 'verify' || process.argv.includes('--verify');
-  const lease = await allocateDatabase();
+  const lease = await allocateDatabase(migrations);
   try {
     if (command !== 'schema')
       console.log(await generateTypes(lease.url, typesFile, verify));
@@ -113,7 +115,7 @@ if (command === 'create') {
       services.postgresUrl,
       `DROP DATABASE IF EXISTS ${developmentDatabaseName}`,
     );
-    await developmentDatabase();
+    await developmentDatabase(true, migrations);
   } else await clearTemplates(services);
 } else if (
   command === 'status' ||
@@ -121,7 +123,7 @@ if (command === 'create') {
   command === 'validate'
 ) {
   const url = process.env.DATABASE_URL ?? (await developmentDatabase(false));
-  const files = await readMigrations(defaultMigrations);
+  const files = await readMigrations(migrations);
   if (command === 'migrate') await migrate(url, files);
   else if (command === 'validate') {
     await validateMigrations(url, files);

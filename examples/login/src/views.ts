@@ -119,10 +119,11 @@ export function accountPage(
   csrf: string,
   showInbox: boolean,
   providers: readonly SignInMethod[],
+  billing = false,
 ): string {
   return page(
     'You’re signed in.',
-    `<p class="intro">Welcome, <strong>${escape(account.email)}</strong>.</p><dl><dt>Signed in</dt><dd>${escape(date(account.created_at))}</dd><dt>Session expires</dt><dd>${escape(date(account.expires_at))}</dd></dl><form method="post" action="/logout">${hidden('csrf', csrf)}<button type="submit">Sign out</button></form>${providerForms(providers, csrf, true)}`,
+    `<p class="intro">Welcome, <strong>${escape(account.email)}</strong>.</p><dl><dt>Signed in</dt><dd>${escape(date(account.created_at))}</dd><dt>Session expires</dt><dd>${escape(date(account.expires_at))}</dd></dl><form method="post" action="/logout">${hidden('csrf', csrf)}<button type="submit">Sign out</button></form>${providerForms(providers, csrf, true)}${billing ? '<p><a href="/billing">Billing and subscription</a></p>' : ''}`,
     showInbox,
   );
 }

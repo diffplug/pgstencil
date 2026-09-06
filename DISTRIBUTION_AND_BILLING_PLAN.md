@@ -1,6 +1,6 @@
 # Public package and SaaS billing plan
 
-Status: proposal for the next implementation. The repository will be public on GitHub. Two separate pnpm applications will consume the shared code; each needs authentication and SaaS subscriptions with a free trial, monthly billing, and discounted annual billing. Trial length, prices, and whether a card is required before the trial starts remain application configuration; the card policy is awaiting a user preference.
+Status: proposal for the next implementation. The repository will be public on GitHub. Two separate pnpm applications will consume the shared code; each needs authentication and SaaS subscriptions with a free trial, monthly billing, and discounted annual billing. Trial length and prices are application configuration. The trial requires a card, collected by Stripe Checkout before access starts. Local package consumption is the initial delivery mechanism; public npm setup is deferred.
 
 ## Distribution
 
@@ -34,7 +34,7 @@ Use the official Stripe Node SDK, hosted Checkout, and the Billing customer port
 
 The example adds a billing page showing trial/access state, current plan, next renewal or access-end date, monthly/annual choices, and a Manage billing action. Checkout and portal creation require authentication, CSRF protection, and permission to manage the relevant billing owner. The server chooses the Stripe customer, prices, quantity, metadata, and return URLs; those are not trusted from the submitted form.
 
-Decide trial enrollment before implementing the first flow. For a no-card trial, the simplest proposed UX grants an application-managed trial on first eligible signup, then uses Checkout when the customer chooses to pay. Persist the trial deadline and eligibility once so repeated sign-ins or abandoned checkouts cannot reset it. Alternatively, Stripe-managed trials can start with or without a payment method; the latter requires an explicit cancel/pause policy at expiry. Avoid maintaining two independent trial deadlines for the same enrollment. With a card-required trial, use Checkout's subscription trial and let Stripe handle the first charge. See [Checkout trials](https://docs.stripe.com/payments/checkout/free-trials?payment-ui=stripe-hosted).
+The trial requires a card. Use Checkout's subscription trial with `payment_method_collection: 'always'` and let Stripe own the deadline and first charge. Persist trial eligibility so cancellation and repeated Checkout cannot restart it. Sign-in and an open Checkout grant no access. See [Checkout trials](https://docs.stripe.com/payments/checkout/free-trials?payment-ui=stripe-hosted) and [the implemented billing guide](BILLING.md).
 
 The paid path creates/reuses a Stripe Customer, opens a subscription Checkout Session, synchronizes verified billing state, and provides authenticated customer portal access for payment details, invoices, and cancellation. Start with cancellation at the end of the paid period. Monthly/annual switching and its billing effective date must be explicit and tested; do not inherit an accidental proration policy. The consumer owns access rules, including any grace period after failed payment, while billing preserves Stripe's actual status and relevant dates. See [subscription lifecycle](https://docs.stripe.com/billing/subscriptions/overview).
 

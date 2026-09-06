@@ -1,5 +1,5 @@
 import { SecureRandom, SystemTime, type EmailSender } from 'pgstencil';
-import { startApp } from './app.ts';
+import { startApp, type AppConfig } from './app.ts';
 import type { OAuthSettings } from './oauth-providers.ts';
 
 /** Compose a real deployment behind an HTTPS reverse proxy. */
@@ -10,6 +10,7 @@ export function startProduction(config: {
   email: EmailSender;
   port?: number;
   oauth?: OAuthSettings;
+  billing?: NonNullable<AppConfig['billing']>;
 }) {
   return startApp({
     ...config,

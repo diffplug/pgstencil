@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Billing · pgstencil</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<!-- THESIS: One sign-in task with clear recovery. OWN-WORLD: Warm paper and forest native forms. STORY: Email, verify, account, logout. FIRST VIEWPORT: Heading, instruction, labeled control, submit, recovery. FORM: Native HTML, no client JavaScript; seed 93f1c640. FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md. -->
+<header><a class="wordmark" href="/login" aria-label="pgstencil home">pgstencil<span aria-hidden="true">.</span></a></header>
+<main id="main"><h1>Billing</h1><p class="intro">yearly · trialing</p><p>Access available · Current access period ends Jan 15, 2020, 12:00 AM UTC.</p><p>Your card will be charged when the trial ends unless you cancel first.</p><p>Monthly billing or a discounted yearly plan. Checkout shows the exact price and renewal terms before you confirm.</p>
+<div class="providers"><form method="post" action="/billing/checkout"><input type="hidden" name="csrf" value="86b50fa518ec0b1b521606376073e69844cdc2af5997ffc98606c75d8dc994aa"><input type="hidden" name="plan" value="monthly"><button type="submit">Choose monthly</button></form><form method="post" action="/billing/checkout"><input type="hidden" name="csrf" value="86b50fa518ec0b1b521606376073e69844cdc2af5997ffc98606c75d8dc994aa"><input type="hidden" name="plan" value="yearly"><button type="submit">Choose yearly</button></form></div>
+<form method="post" action="/billing/portal"><input type="hidden" name="csrf" value="86b50fa518ec0b1b521606376073e69844cdc2af5997ffc98606c75d8dc994aa"><button type="submit">Manage billing</button></form>
+<form method="post" action="/billing/cancel-checkout"><input type="hidden" name="csrf" value="86b50fa518ec0b1b521606376073e69844cdc2af5997ffc98606c75d8dc994aa"><button type="submit">Cancel an unfinished checkout</button></form>
+<p><a href="/account">Return to account</a></p></main>
+<footer>pgstencil <span>Simple sign-in. Your email is your key.</span></footer>
+</body></html>

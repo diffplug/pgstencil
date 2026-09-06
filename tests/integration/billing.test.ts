@@ -275,7 +275,7 @@ billingTest(
   'expired and canceled checkouts can be replaced without spending the trial',
   async ({ f }) => {
     const first = await f.start();
-    f.time.advanceMilliseconds(30 * 60000);
+    f.time.advanceMilliseconds(60 * 60000);
     await expect(f.start()).rejects.toThrow('expired');
     const second = await f.start('yearly');
     expect(second.checkout.id).not.toBe(first.checkout.id);

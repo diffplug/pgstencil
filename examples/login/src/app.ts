@@ -31,6 +31,15 @@ import {
   errorMessage,
 } from './views.ts';
 import { devInboxRoutes } from './dev-inbox.ts';
+import {
+  Billing,
+  BillingError,
+  type BillingConfig,
+  type BillingDB,
+  type Stripe,
+} from '@pgstencil/stripe';
+import type { Kysely } from 'kysely';
+import { billingPage } from './billing-view.ts';
 import { OAuth } from './oauth.ts';
 import {
   OAuthProviders,
@@ -54,6 +63,12 @@ export interface AppConfig {
   oauth?: OAuthSettings;
   /** Optional transport seam for local protocol tests; no provider credentials are faked by default. */
   oauthFetch?: OAuthFetch;
+  billing?: {
+    stripe: Stripe;
+    config: Omit<BillingConfig, 'origin'>;
+    /** Local simulator origin, accepted only in development. */
+    devOrigin?: string;
+  };
 }
 const MAX_BODY_BYTES = 8192;
 const OAUTH_ROUTE = /^\/oauth\/([^/]+)\/(start|connect|callback)$/;
@@ -103,6 +118,16 @@ export async function startApp(config: AppConfig) {
       secret: config.secret,
       origin,
     });
+    // Both services share the pool; Billing qualifies all its tables with its schema.
+    const billing = config.billing
+      ? new Billing(
+          db as unknown as Kysely<BillingDB>,
+          config.billing.stripe,
+          config.time,
+          config.random,
+          { ...config.billing.config, origin },
+        )
+      : undefined;
     const inbox = config.devInbox
       ? devInboxRoutes(config.devInbox, config.time, origin)
       : undefined;
@@ -118,7 +143,9 @@ export async function startApp(config: AppConfig) {
     const oauthName = secure ? '__Host-pgstencil-oauth' : 'pgstencil_oauth';
     const contentSecurityPolicy = `default-src 'none'; style-src 'self'; form-action 'self'${oauth.providers.enabled
       .map((provider) => ` ${PROVIDER_ORIGINS[provider]}`)
-      .join('')}; base-uri 'none'; frame-ancestors 'none'`;
+      .join(
+        '',
+      )}${billing ? ' https://checkout.stripe.com https://billing.stripe.com' : ''}${development && config.billing?.devOrigin ? ` ${new URL(config.billing.devOrigin).origin}` : ''}; base-uri 'none'; frame-ancestors 'none'`;
     const sessionName = secure ? '__Host-pgstencil' : 'pgstencil_dev';
     const pendingName = secure
       ? '__Host-pgstencil-pending'
@@ -162,6 +189,41 @@ export async function startApp(config: AppConfig) {
       res.setHeader('x-content-type-options', 'nosniff');
       res.setHeader('content-security-policy', contentSecurityPolicy);
       const url = new URL(req.url ?? '/', origin);
+      if (
+        billing &&
+        req.method === 'POST' &&
+        url.pathname === '/webhooks/stripe'
+      ) {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const chunk of req) {
+          size += (chunk as Buffer).length;
+          if (size > 1024 * 1024) {
+            res.writeHead(413).end();
+            return;
+          }
+          chunks.push(Buffer.from(chunk));
+        }
+        const signature = req.headers['stripe-signature'];
+        if (typeof signature !== 'string') {
+          res.writeHead(400).end();
+          return;
+        }
+        const body = Buffer.concat(chunks);
+        try {
+          billing.verifyWebhook(body, signature);
+        } catch {
+          res.writeHead(400).end();
+          return;
+        }
+        try {
+          await billing.webhook(body, signature);
+          res.writeHead(200).end();
+        } catch {
+          res.writeHead(503).end();
+        }
+        return;
+      }
       // The static asset answers before any cookie or route parsing.
       if (req.method === 'GET' && url.pathname === '/style.css') {
         res.setHeader('content-type', 'text/css; charset=utf-8');
@@ -170,6 +232,42 @@ export async function startApp(config: AppConfig) {
       }
       const cookies = cookieValues(req.headers.cookie);
       const rawSession = cookies[sessionName];
+      if (billing && req.method === 'GET' && url.pathname === '/billing') {
+        const session = await auth.session(rawSession);
+        if (!session) {
+          redirect(res, '/login');
+          return;
+        }
+        await billing.account(session.user_id, session.email);
+        const operation = url.searchParams.get('checkout');
+        try {
+          if (operation)
+            await billing.confirmCheckout(session.user_id, operation);
+          else await billing.reconcile(session.user_id);
+          send(
+            res,
+            200,
+            billingPage(
+              await billing.status(session.user_id),
+              auth.sessionCsrf(rawSession!),
+              billing.config.trialDays,
+              showInbox,
+            ),
+          );
+        } catch (error) {
+          fail(
+            res,
+            error instanceof BillingError ? error.status : 503,
+            'Billing unavailable.',
+            errorMessage(
+              error instanceof BillingError
+                ? error.message
+                : 'Please try again shortly.',
+            ),
+          );
+        }
+        return;
+      }
       const oauthMatch = OAUTH_ROUTE.exec(url.pathname);
       const provider = oauthMatch
         ? oauth.providers.enabled.find((id) => id === oauthMatch[1])
@@ -244,6 +342,7 @@ export async function startApp(config: AppConfig) {
               ...method,
               connected: connected.some((row) => row.provider === method.id),
             })),
+            !!billing,
           ),
         );
         return;
@@ -320,6 +419,49 @@ export async function startApp(config: AppConfig) {
         }
         const form = new URLSearchParams(body);
         const csrf = form.get('csrf') ?? '';
+        if (billing && url.pathname.startsWith('/billing/')) {
+          const session = await auth.session(rawSession);
+          if (!session || !equalDigest(session.csrf_hash, digest(csrf))) {
+            fail(
+              res,
+              403,
+              'Request not accepted.',
+              '<p>Return to your account and try again.</p>',
+            );
+            return;
+          }
+          try {
+            if (url.pathname === '/billing/checkout') {
+              const plan = form.get('plan');
+              if (plan !== 'monthly' && plan !== 'yearly')
+                throw new BillingError('Choose monthly or yearly.', 400);
+              redirect(
+                res,
+                (await billing.checkout(session.user_id, session.email, plan))
+                  .url,
+              );
+            } else if (url.pathname === '/billing/portal')
+              redirect(res, await billing.portal(session.user_id));
+            else if (url.pathname === '/billing/cancel-checkout') {
+              await billing.cancelCheckout(session.user_id);
+              redirect(res, '/billing');
+            } else
+              fail(
+                res,
+                404,
+                'Page not found.',
+                '<a href="/billing">Return to billing</a>',
+              );
+          } catch (error) {
+            fail(
+              res,
+              error instanceof BillingError ? error.status : 503,
+              'Billing unavailable.',
+              `${errorMessage(error instanceof BillingError ? error.message : 'Please try again shortly.')}<a href="/billing">Return to billing</a>`,
+            );
+          }
+          return;
+        }
         const source = req.socket.remoteAddress ?? 'unknown';
         if (provider && (action === 'start' || action === 'connect')) {
           const linking = action === 'connect';
@@ -462,6 +604,7 @@ export async function startApp(config: AppConfig) {
       publicOrigin: origin,
       db,
       auth,
+      billing,
       sessionName,
       pendingName,
       oauthName,

@@ -17,9 +17,83 @@ SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
+--
+-- Name: pgstencil_billing; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA pgstencil_billing;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
+
+--
+-- Name: accounts; Type: TABLE; Schema: pgstencil_billing; Owner: -
+--
+
+CREATE TABLE pgstencil_billing.accounts (
+    owner_id text NOT NULL,
+    email text NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    trial_used_at timestamp with time zone,
+    customer_id text,
+    customer_key text,
+    customer_started_at timestamp with time zone,
+    CONSTRAINT accounts_check CHECK (((customer_key IS NULL) = (customer_started_at IS NULL)))
+);
+
+
+--
+-- Name: checkouts; Type: TABLE; Schema: pgstencil_billing; Owner: -
+--
+
+CREATE TABLE pgstencil_billing.checkouts (
+    id text NOT NULL,
+    owner_id text NOT NULL,
+    plan text NOT NULL,
+    price_id text NOT NULL,
+    trial_days integer NOT NULL,
+    status text NOT NULL,
+    session_id text,
+    url text,
+    created_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT checkouts_plan_check CHECK ((plan = ANY (ARRAY['monthly'::text, 'yearly'::text]))),
+    CONSTRAINT checkouts_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'open'::text, 'complete'::text, 'expired'::text]))),
+    CONSTRAINT checkouts_trial_days_check CHECK ((trial_days >= 0))
+);
+
+
+--
+-- Name: events; Type: TABLE; Schema: pgstencil_billing; Owner: -
+--
+
+CREATE TABLE pgstencil_billing.events (
+    id text NOT NULL,
+    type text NOT NULL,
+    received_at timestamp with time zone NOT NULL,
+    processed_at timestamp with time zone,
+    attempts integer DEFAULT 0 NOT NULL,
+    failed boolean DEFAULT false NOT NULL
+);
+
+
+--
+-- Name: subscriptions; Type: TABLE; Schema: pgstencil_billing; Owner: -
+--
+
+CREATE TABLE pgstencil_billing.subscriptions (
+    id text NOT NULL,
+    owner_id text NOT NULL,
+    price_id text NOT NULL,
+    status text NOT NULL,
+    period_end timestamp with time zone NOT NULL,
+    trial_end timestamp with time zone,
+    cancel_at_period_end boolean NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
 
 --
 -- Name: login_challenges; Type: TABLE; Schema: public; Owner: -
@@ -173,6 +247,54 @@ ALTER TABLE ONLY public.pgmigrations ALTER COLUMN id SET DEFAULT nextval('public
 
 
 --
+-- Name: accounts accounts_customer_id_key; Type: CONSTRAINT; Schema: pgstencil_billing; Owner: -
+--
+
+ALTER TABLE ONLY pgstencil_billing.accounts
+    ADD CONSTRAINT accounts_customer_id_key UNIQUE (customer_id);
+
+
+--
+-- Name: accounts accounts_pkey; Type: CONSTRAINT; Schema: pgstencil_billing; Owner: -
+--
+
+ALTER TABLE ONLY pgstencil_billing.accounts
+    ADD CONSTRAINT accounts_pkey PRIMARY KEY (owner_id);
+
+
+--
+-- Name: checkouts checkouts_pkey; Type: CONSTRAINT; Schema: pgstencil_billing; Owner: -
+--
+
+ALTER TABLE ONLY pgstencil_billing.checkouts
+    ADD CONSTRAINT checkouts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: checkouts checkouts_session_id_key; Type: CONSTRAINT; Schema: pgstencil_billing; Owner: -
+--
+
+ALTER TABLE ONLY pgstencil_billing.checkouts
+    ADD CONSTRAINT checkouts_session_id_key UNIQUE (session_id);
+
+
+--
+-- Name: events events_pkey; Type: CONSTRAINT; Schema: pgstencil_billing; Owner: -
+--
+
+ALTER TABLE ONLY pgstencil_billing.events
+    ADD CONSTRAINT events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: subscriptions subscriptions_pkey; Type: CONSTRAINT; Schema: pgstencil_billing; Owner: -
+--
+
+ALTER TABLE ONLY pgstencil_billing.subscriptions
+    ADD CONSTRAINT subscriptions_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: login_challenges login_challenges_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -261,6 +383,20 @@ ALTER TABLE ONLY public.users
 
 
 --
+-- Name: billing_one_checkout; Type: INDEX; Schema: pgstencil_billing; Owner: -
+--
+
+CREATE UNIQUE INDEX billing_one_checkout ON pgstencil_billing.checkouts USING btree (owner_id) WHERE (status = ANY (ARRAY['pending'::text, 'open'::text]));
+
+
+--
+-- Name: billing_subscription_owner; Type: INDEX; Schema: pgstencil_billing; Owner: -
+--
+
+CREATE INDEX billing_subscription_owner ON pgstencil_billing.subscriptions USING btree (owner_id);
+
+
+--
 -- Name: login_challenges_flow; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -272,6 +408,22 @@ CREATE INDEX login_challenges_flow ON public.login_challenges USING btree (flow_
 --
 
 CREATE INDEX oauth_flows_expiry ON public.oauth_flows USING btree (expires_at);
+
+
+--
+-- Name: checkouts checkouts_owner_id_fkey; Type: FK CONSTRAINT; Schema: pgstencil_billing; Owner: -
+--
+
+ALTER TABLE ONLY pgstencil_billing.checkouts
+    ADD CONSTRAINT checkouts_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES pgstencil_billing.accounts(owner_id);
+
+
+--
+-- Name: subscriptions subscriptions_owner_id_fkey; Type: FK CONSTRAINT; Schema: pgstencil_billing; Owner: -
+--
+
+ALTER TABLE ONLY pgstencil_billing.subscriptions
+    ADD CONSTRAINT subscriptions_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES pgstencil_billing.accounts(owner_id);
 
 
 --

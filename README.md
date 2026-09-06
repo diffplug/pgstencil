@@ -135,3 +135,7 @@ This is an example authentication application; email sign-in remains an availabl
 GitHub Actions installs with the frozen lockfile on Node 24/Linux, verifies formatting, generated schema/types, typechecks, and runs the complete Docker suite before removing that job's containers and volumes. Local editor typechecking works without Docker because generated types are committed.
 
 See [PLAN.md](PLAN.md) for architectural decisions and remaining expansion work, and [LOGIN_FLOW.md](LOGIN_FLOW.md) for the login contract.
+
+## Billing
+
+The example includes a card-required SaaS trial, monthly/yearly plans, and a local Stripe simulator. See [BILLING.md](BILLING.md) for setup, entitlement rules, recovery and production configuration.

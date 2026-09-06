@@ -1,0 +1,69 @@
+{
+  "name": "@pgstencil/auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./migrations": "./src/migrations.ts",
+    "./auth": "./src/auth.ts",
+    "./security": "./src/security.ts",
+    "./oauth": "./src/oauth.ts",
+    "./oauth-providers": "./src/oauth-providers.ts",
+    "./db.generated": "./src/db.generated.ts",
+    "./email": "./src/email.ts",
+    "./http": "./src/http.ts"
+  },
+  "dependencies": {
+    "pgstencil": "workspace:*",
+    "kysely": "0.29.5",
+    "openid-client": "6.8.8"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "dist",
+    "migrations"
+  ],
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./migrations": {
+        "types": "./dist/migrations.d.ts",
+        "import": "./dist/migrations.js"
+      },
+      "./auth": {
+        "types": "./dist/auth.d.ts",
+        "import": "./dist/auth.js"
+      },
+      "./security": {
+        "types": "./dist/security.d.ts",
+        "import": "./dist/security.js"
+      },
+      "./oauth": {
+        "types": "./dist/oauth.d.ts",
+        "import": "./dist/oauth.js"
+      },
+      "./oauth-providers": {
+        "types": "./dist/oauth-providers.d.ts",
+        "import": "./dist/oauth-providers.js"
+      },
+      "./db.generated": {
+        "types": "./dist/db.generated.d.ts",
+        "import": "./dist/db.generated.js"
+      },
+      "./email": {
+        "types": "./dist/email.d.ts",
+        "import": "./dist/email.js"
+      },
+      "./http": {
+        "types": "./dist/http.d.ts",
+        "import": "./dist/http.js"
+      }
+    }
+  }
+}

@@ -1,0 +1,3 @@
+{
+  "migrations": "packages/auth/migrations"
+}

@@ -25,7 +25,10 @@
     "db:verify": "tsx scripts/db.ts verify",
     "db:reset": "tsx scripts/db.ts reset",
     "db:stop": "tsx scripts/db.ts stop",
-    "db:gc": "tsx scripts/db.ts gc"
+    "db:gc": "tsx scripts/db.ts gc",
+    "packages:build": "node --import tsx scripts/build-packages.ts",
+    "packages:pack": "pnpm packages:build && pnpm --filter pgstencil --filter @pgstencil/auth --filter @pgstencil/stripe -r pack --pack-destination dist/packages",
+    "packages:verify": "pnpm packages:pack && node --import tsx scripts/verify-packages.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

@@ -17,5 +17,36 @@
     "testcontainers": "12.1.0",
     "cheerio": "^1.1.0",
     "turndown": "^7.2.0"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "dist",
+    "migrations"
+  ],
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./database": {
+        "types": "./dist/database.d.ts",
+        "import": "./dist/database.js"
+      },
+      "./snapshots": {
+        "types": "./dist/snapshots.d.ts",
+        "import": "./dist/snapshots.js"
+      },
+      "./testing": {
+        "types": "./dist/testing.d.ts",
+        "import": "./dist/testing.js"
+      },
+      "./postgres": {
+        "types": "./dist/postgres.d.ts",
+        "import": "./dist/postgres.js"
+      }
+    }
   }
 }

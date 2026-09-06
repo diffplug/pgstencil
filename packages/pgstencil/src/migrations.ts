@@ -6,6 +6,8 @@ import pg from 'pg';
 import { runner } from 'node-pg-migrate';
 import { withClient } from './postgres.ts';
 export interface MigrationFile {
+  /** Ordering is enforced within each directory; package sources evolve independently. */
+  source: string;
   name: string;
   content: string;
   hash: string;
@@ -31,6 +33,7 @@ export async function readMigrations(
         throw new Error(`Expected numbered SQL migration: ${name}`);
       const content = await readFile(join(directory, name), 'utf8');
       return {
+        source: directory,
         name,
         content,
         hash: createHash('sha256').update(content).digest('hex'),
@@ -88,6 +91,22 @@ async function validateClient(
   for (const name of applied)
     if (!expected.has(name) || saved.get(name) !== expected.get(name))
       throw new Error(`Applied migration changed or missing: ${name}`);
+  // Each source must be an append-only history. A newly installed package can
+  // have lower numbers than an application's already-applied migrations.
+  const groups = new Map<string, MigrationFile[]>();
+  for (const file of files) {
+    const group = groups.get(file.source) ?? [];
+    group.push(file);
+    groups.set(file.source, group);
+  }
+  for (const group of groups.values()) {
+    const names = group.map((file) => file.name);
+    const history = applied.filter((name) => names.includes(name));
+    if (history.some((name, index) => names[index] !== name))
+      throw new Error(
+        `Migration order changed within source: ${group[0]!.source}`,
+      );
+  }
 }
 export async function validateMigrations(
   url: string,
@@ -124,7 +143,8 @@ export async function migrate(
       dir: temporary,
       direction: 'up',
       migrationsTable: 'pgmigrations',
-      checkOrder: true,
+      // validateClient enforces order per source rather than globally.
+      checkOrder: false,
       singleTransaction: true,
       log: () => {},
       logger: {

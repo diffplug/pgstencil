@@ -1,7 +1,21 @@
 import { createHash } from 'node:crypto';
 import { resolve, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 /** Workspace paths, kept free of heavy imports so light scripts can use them. */
-export const projectRoot = resolve(import.meta.dirname, '../../..');
+export const projectRoot = resolve(
+  process.env.PGSTENCIL_PROJECT_ROOT ?? process.cwd(),
+);
+const configFile = join(projectRoot, 'pgstencil.json');
+const config = existsSync(configFile)
+  ? (JSON.parse(readFileSync(configFile, 'utf8')) as { migrations?: string })
+  : {};
+export const defaultMigrations = resolve(
+  projectRoot,
+  config.migrations ?? 'migrations',
+);
 export const stateDirectory = join(projectRoot, '.pgstencil');
-export const composeFile = join(projectRoot, 'compose.yaml');
+export const composeFile = existsSync(join(projectRoot, 'compose.yaml'))
+  ? join(projectRoot, 'compose.yaml')
+  : fileURLToPath(new URL('./compose.yaml', import.meta.url));
 export const projectName = `pgstencil-${createHash('sha256').update(projectRoot).digest('hex').slice(0, 12)}`;

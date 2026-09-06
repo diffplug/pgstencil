@@ -6,10 +6,7 @@ export default defineConfig({
     hookTimeout: 120000,
     maxWorkers: 4,
     update: process.env.PGSTENCIL_UPDATE === '1' ? 'all' : 'none',
-    forceRerunTriggers: [
-      '**/examples/login/migrations/*.sql',
-      '**/compose.yaml',
-    ],
+    forceRerunTriggers: ['**/packages/*/migrations/*.sql', '**/compose.yaml'],
     sequence: { concurrent: false },
   },
 });

@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, mkdir, cp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -11,6 +11,49 @@ import {
   migrate,
   prepareTemplate,
 } from '../../packages/pgstencil/src/database.ts';
+
+test('shared SQL sources upgrade independently while each history stays append-only', async ({
+  onTestFinished,
+}) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pgstencil-sources-'));
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
+  const shared = join(directory, 'auth');
+  const application = join(directory, 'application');
+  await cp(defaultMigrations, shared, { recursive: true });
+  await mkdir(application);
+  await writeFile(
+    join(application, '100_domain.sql'),
+    '-- Up Migration\nCREATE TABLE profiles (user_id text PRIMARY KEY REFERENCES users(id), label text);\n-- Down Migration\nDROP TABLE profiles;',
+  );
+  const sources = [shared, application];
+  const lease = await allocateDatabase(sources);
+  onTestFinished(() => lease.close());
+  await queryDatabase(
+    lease.url,
+    "INSERT INTO users VALUES ('u', 'upgrade@example.test', '2020-01-01'); INSERT INTO profiles VALUES ('u', 'preserved')",
+  );
+  await writeFile(
+    join(shared, '003_auth_display.sql'),
+    '-- Up Migration\nALTER TABLE users ADD COLUMN display_name text;\n-- Down Migration\nALTER TABLE users DROP COLUMN display_name;',
+  );
+  await migrate(lease.url, await readMigrations(sources));
+  expect(
+    await queryDatabase(
+      lease.url,
+      'SELECT label, display_name FROM profiles JOIN users ON users.id=profiles.user_id',
+    ),
+  ).toEqual([{ label: 'preserved', display_name: null }]);
+  await writeFile(
+    join(application, '099_backfill.sql'),
+    '-- Up Migration\nSELECT 1;\n-- Down Migration\nSELECT 1;',
+  );
+  await expect(
+    migrate(lease.url, await readMigrations(sources)),
+  ).rejects.toThrow('order changed within source');
+  await expect(readMigrations([shared, shared])).rejects.toThrow(
+    'duplicate filenames',
+  );
+});
 test('warm templates produce isolated writable databases', async () => {
   const a = await allocateDatabase();
   const b = await allocateDatabase();

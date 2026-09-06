@@ -1,5 +1,7 @@
 pnpm-lock.yaml
 .pgstencil
+.build
+**/dist/**
 **/snapshots/**
-examples/login/src/db.generated.ts
+**/db.generated.ts
 examples/login/schema.sql

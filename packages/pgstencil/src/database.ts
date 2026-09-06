@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import {
   DockerComposeEnvironment,
   Wait,
@@ -15,6 +15,7 @@ import {
   projectName,
   projectRoot,
   stateDirectory,
+  defaultMigrations,
 } from './paths.ts';
 export {
   appliedMigrations,
@@ -28,6 +29,7 @@ export {
   projectName,
   projectRoot,
   stateDirectory,
+  defaultMigrations,
 } from './paths.ts';
 export interface Services {
   project: string;
@@ -48,7 +50,6 @@ interface DatabaseHandle {
 interface Allocation extends DatabaseHandle {
   id: number;
 }
-export const defaultMigrations = join(projectRoot, 'examples/login/migrations');
 export const developmentDatabaseName = 'pgstencil_dev';
 /** IntegreSQL has no health endpoint; an unknown template answers 404 once it is up. */
 const READINESS_PATH = '/templates/pgstencil-readiness/tests';
@@ -75,8 +76,8 @@ export function ensureServices(): Promise<Services> {
         /* Stale or absent state: reattach/start through Compose. */
       }
       environment = await new DockerComposeEnvironment(
-        projectRoot,
-        'compose.yaml',
+        dirname(composeFile),
+        basename(composeFile),
       )
         .withAutoCleanup(false)
         .withNoRecreate()

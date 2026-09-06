@@ -25,7 +25,7 @@ import { appMigrations as migrations } from '../examples/login/src/migrations.ts
 const exec = promisify(execFile);
 const command = process.argv[2];
 const statePath = join(stateDirectory, 'services.json');
-const typesFile = 'examples/login/src/db.generated.ts';
+const typesFile = 'packages/auth/src/db.generated.ts';
 const schemaFile = join(projectRoot, 'examples/login/schema.sql');
 /**
  * `unreachableIsIdle` is only for `stop`, which reads a recorded stack that may

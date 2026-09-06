@@ -287,3 +287,69 @@ test('failed email delivery leaves an unusable challenge', async ({
   expect(challenge.delivered_at).toBeNull();
   expect(challenge.invalidated_at).not.toBeNull();
 });
+
+test('a returning user gets a fresh session and the previous token is revoked', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  const first = await login(f);
+  const second = await begin(f, ' ALICE@EXAMPLE.TEST ');
+  const response = await post(
+    f,
+    '/login/code',
+    { csrf: second.csrf, code: second.code },
+    `${second.pendingCookie}; ${first.sessionCookie}`,
+  ).expect(303);
+  expect(cookies(response)).not.toContain(first.sessionCookie);
+  expect(await f.app.db.selectFrom('users').selectAll().execute()).toHaveLength(
+    1,
+  );
+  await request(f.app.origin)
+    .get('/account')
+    .set('Cookie', first.sessionCookie)
+    .expect(303);
+  const sessions = await f.app.db.selectFrom('sessions').selectAll().execute();
+  expect(sessions).toHaveLength(2);
+  expect(sessions.filter((s) => s.revoked_at !== null)).toHaveLength(1);
+});
+
+test('send limits aggregate across browsers and server instances', async ({
+  onTestFinished,
+}) => {
+  const a = await fixture({ seed: 'instance-a' });
+  const b = await fixture({ seed: 'instance-b', databaseUrl: a.database.url });
+  onTestFinished(async () => {
+    await b.close();
+    await a.close();
+  });
+  for (let i = 0; i < 5; i++) await begin(i % 2 ? a : b);
+  const page = await a.client.get('/login').expect(200);
+  await post(
+    a,
+    '/login',
+    { csrf: field(page.text, 'csrf'), email: 'alice@example.test' },
+    cookies(page),
+  ).expect(429);
+  expect(a.email.all().length + b.email.all().length).toBe(5);
+  a.time.advanceMilliseconds(15 * 60000);
+  await begin(a);
+});
+
+test.for(['code', 'link'] as const)(
+  '%s works just before expiry and cannot replay',
+  async (method, { onTestFinished }) => {
+    const f = await fixture();
+    onTestFinished(() => f.close());
+    const flow = await begin(f);
+    f.time.advanceMilliseconds(599999);
+    const body = {
+      csrf: flow.csrf,
+      code: flow.code,
+      id: flow.link.searchParams.get('id')!,
+      token: flow.link.searchParams.get('token')!,
+    };
+    await post(f, `/login/${method}`, body, flow.pendingCookie).expect(303);
+    await post(f, `/login/${method}`, body, flow.pendingCookie).expect(403);
+  },
+);

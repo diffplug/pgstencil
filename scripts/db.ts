@@ -117,17 +117,30 @@ if (command === 'create') {
   command === 'migrate' ||
   command === 'validate'
 ) {
-  const url = process.env.DATABASE_URL ?? (await developmentDatabase());
+  const url = process.env.DATABASE_URL ?? (await developmentDatabase(false));
   const files = await readMigrations(defaultMigrations);
   if (command === 'migrate') await migrate(url, files);
   else if (command === 'validate') {
     await validateMigrations(url, files);
     console.log('Applied SQL migration contents match.');
-  } else
-    console.table(
-      await queryDatabase(
-        url,
-        'SELECT name, run_on FROM pgmigrations ORDER BY id',
-      ),
+  } else {
+    const [history] = await queryDatabase(
+      url,
+      "SELECT to_regclass('public.pgmigrations') AS name",
     );
+    const applied = history?.name
+      ? await queryDatabase<{ name: string }>(
+          url,
+          'SELECT name FROM pgmigrations ORDER BY id',
+        )
+      : [];
+    console.table(
+      files.map((file) => ({
+        name: file.name,
+        status: applied.some((row) => `${row.name}.sql` === file.name)
+          ? 'applied'
+          : 'pending',
+      })),
+    );
+  }
 } else throw new Error('Unknown database command');

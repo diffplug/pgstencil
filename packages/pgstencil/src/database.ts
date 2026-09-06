@@ -142,9 +142,16 @@ export async function prepareTemplate(
     await admin.query('SELECT pg_advisory_lock(hashtext($1))', [
       `pgstencil-template-${hash}`,
     ]);
+    // Different migration fingerprints can initialize concurrently. Serialize
+    // the catalog DDL as well: IF NOT EXISTS alone is not a concurrency lock.
+    await admin.query('BEGIN');
+    await admin.query(
+      "SELECT pg_advisory_xact_lock(hashtext('pgstencil-catalog'))",
+    );
     await admin.query(
       'CREATE TABLE IF NOT EXISTS pgstencil_ready_templates (hash text PRIMARY KEY)',
     );
+    await admin.query('COMMIT');
     let response = await api(services, '/templates', 'POST', { hash });
     if (response.status === 423) {
       const ready = await admin.query(
@@ -236,7 +243,9 @@ export async function queryDatabase<
     await client.end();
   }
 }
-export async function developmentDatabase(): Promise<string> {
+export async function developmentDatabase(
+  applyMigrations = true,
+): Promise<string> {
   const services = await ensureServices();
   const name = 'pgstencil_dev';
   await withProcessLock(join(stateDirectory, 'dev-db.lock'), async () => {
@@ -253,6 +262,7 @@ export async function developmentDatabase(): Promise<string> {
   });
   const url = new URL(services.postgresUrl);
   url.pathname = `/${name}`;
-  await migrate(url.toString(), await readMigrations(defaultMigrations));
+  if (applyMigrations)
+    await migrate(url.toString(), await readMigrations(defaultMigrations));
   return url.toString();
 }

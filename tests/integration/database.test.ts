@@ -92,3 +92,41 @@ test('SQL upgrades preserve data and failed template initialization is recoverab
     { email: 'returning@example.test' },
   ]);
 });
+
+test('OAuth migration preserves existing email accounts and sessions', async ({
+  onTestFinished,
+}) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pgstencil-oauth-upgrade-'));
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(
+    join(directory, '001_auth.sql'),
+    await readFile(join(defaultMigrations, '001_auth.sql')),
+  );
+  const database = await allocateDatabase(directory);
+  onTestFinished(() => database.close());
+  await queryDatabase(
+    database.url,
+    "INSERT INTO users VALUES ('existing', 'returning@example.test', '2020-01-01')",
+  );
+  await queryDatabase(
+    database.url,
+    "INSERT INTO sessions VALUES ('existing-token-hash', 'existing', 'csrf-hash', '2020-01-01', '2020-01-02', NULL)",
+  );
+  const before = await queryDatabase(
+    database.url,
+    'SELECT * FROM sessions JOIN users ON users.id = sessions.user_id',
+  );
+  await migrate(database.url, await readMigrations(defaultMigrations));
+  expect(
+    await queryDatabase(
+      database.url,
+      'SELECT * FROM sessions JOIN users ON users.id = sessions.user_id',
+    ),
+  ).toEqual(before);
+  expect(
+    await queryDatabase(database.url, 'SELECT * FROM oauth_identities'),
+  ).toEqual([]);
+  expect(
+    await queryDatabase(database.url, 'SELECT * FROM oauth_flows'),
+  ).toEqual([]);
+});

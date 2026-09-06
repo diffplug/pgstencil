@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Welcome in. · pgstencil</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<!-- THESIS: One sign-in task with clear recovery. OWN-WORLD: Warm paper and forest native forms. STORY: Email, verify, account, logout. FIRST VIEWPORT: Heading, instruction, labeled control, submit, recovery. FORM: Native HTML, no client JavaScript; seed 93f1c640. FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md. -->
+<header><a class="wordmark" href="/login" aria-label="pgstencil home">pgstencil<span aria-hidden="true">.</span></a><a class="dev-link" href="/dev/emails">Local inbox</a></header>
+<main id="main"><h1>Welcome in.</h1><p class="intro">Sign in with your email. We’ll send you a code and a link—use whichever you prefer.</p>
+<form method="post" action="/login"><input type="hidden" name="csrf" value="e79f63853f528504931cb645dd30d1af9e9f0fa5c609c24ed51a30a435fd1112"><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required><button type="submit">Send sign-in code</button></form>
+<p class="note">New here? Your account is created when you verify your email.</p><fieldset class="providers"><legend>Or continue with</legend><form method="post" action="/oauth/google/start"><input type="hidden" name="csrf" value="e79f63853f528504931cb645dd30d1af9e9f0fa5c609c24ed51a30a435fd1112"><button class="provider-button" type="submit">Continue with Google</button></form><form method="post" action="/oauth/github/start"><input type="hidden" name="csrf" value="e79f63853f528504931cb645dd30d1af9e9f0fa5c609c24ed51a30a435fd1112"><button class="provider-button" type="submit">Continue with GitHub</button></form></fieldset></main>
+<footer>pgstencil <span>Simple sign-in. Your email is your key.</span></footer>
+</body></html>

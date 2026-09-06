@@ -4,7 +4,16 @@ import {
   captureResponse,
   stableJson,
   captureEmail,
+  normalizeOrigin,
 } from '../../packages/pgstencil/src/snapshots.ts';
+
+test('OAuth redirect captures normalize the known encoded origin and retain other URL parameters', () => {
+  const input =
+    'https://accounts.google.com/auth?redirect_uri=http%3A%2F%2F127.0.0.1%3A4321%2Foauth%2Fgoogle%2Fcallback&state=abc&other=http%3A%2F%2Flocalhost%3A9999';
+  expect(normalizeOrigin(input, 'http://127.0.0.1:4321')).toBe(
+    'https://accounts.google.com/auth?redirect_uri=https%3A%2F%2Fpgstencil.test%2Foauth%2Fgoogle%2Fcallback&state=abc&other=http%3A%2F%2Flocalhost%3A9999',
+  );
+});
 
 test('Markdown lenses retain meaningful tables, links, fields, images and preformatted text', () => {
   const markdown = htmlToMarkdown(

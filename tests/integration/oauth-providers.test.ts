@@ -2,7 +2,6 @@ import { test, expect } from 'vitest';
 import {
   OAuthProviders,
   type OAuthProof,
-  type Provider,
 } from '../../examples/login/src/oauth-providers.ts';
 import { mockOAuthServer, oauthCredentials } from '../support/oauth-server.ts';
 

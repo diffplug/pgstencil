@@ -28,8 +28,18 @@ import {
   confirmPage,
   accountPage,
   sendFailurePage,
+  escape,
 } from './views.ts';
 import { devInboxRoutes } from './dev-inbox.ts';
+import { OAuth } from './oauth.ts';
+import {
+  OAuthProviders,
+  PROVIDER_LABELS,
+  PROVIDER_ORIGINS,
+  isProvider,
+  type OAuthSettings,
+  type OAuthFetch,
+} from './oauth-providers.ts';
 export interface AppConfig {
   databaseUrl: string;
   time: Time;
@@ -42,6 +52,9 @@ export interface AppConfig {
   port?: number;
   /** Supplying the capture inbox mounts /dev/emails; production simply cannot. */
   devInbox?: EmailDev;
+  oauth?: OAuthSettings;
+  /** Optional transport seam for local protocol tests; no provider credentials are faked by default. */
+  oauthFetch?: OAuthFetch;
 }
 const MAX_BODY_BYTES = 8192;
 // Every instance serves the same stylesheet: read it once per process.
@@ -93,6 +106,15 @@ export async function startApp(config: AppConfig) {
       ? devInboxRoutes(config.devInbox, config.time, origin)
       : undefined;
     const showInbox = inbox !== undefined;
+    const oauth = new OAuth(
+      auth,
+      new OAuthProviders(config.oauth ?? {}, config.oauthFetch),
+    );
+    const methods = oauth.providers.enabled.map((id) => ({
+      id,
+      label: PROVIDER_LABELS[id],
+    }));
+    const oauthName = secure ? '__Host-pgstencil-oauth' : 'pgstencil_oauth';
     const sessionName = secure ? '__Host-pgstencil' : 'pgstencil_dev';
     const pendingName = secure
       ? '__Host-pgstencil-pending'
@@ -136,11 +158,54 @@ export async function startApp(config: AppConfig) {
       res.setHeader('x-content-type-options', 'nosniff');
       res.setHeader(
         'content-security-policy',
-        "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        `default-src 'none'; style-src 'self'; form-action 'self'${oauth.providers.enabled.map((provider) => ` ${PROVIDER_ORIGINS[provider]}`).join('')}; base-uri 'none'; frame-ancestors 'none'`,
       );
       const url = new URL(req.url ?? '/', origin);
       const cookies = cookieValues(req.headers.cookie);
       const rawSession = cookies[sessionName];
+      const oauthRoute = url.pathname.match(
+        /^\/oauth\/([^/]+)\/(start|connect|callback)$/,
+      );
+      const provider =
+        oauthRoute &&
+        isProvider(oauthRoute[1]!) &&
+        oauth.providers.enabled.includes(oauthRoute[1])
+          ? oauthRoute[1]
+          : undefined;
+      if (oauthRoute && !provider) {
+        fail(
+          res,
+          404,
+          'Sign-in method unavailable.',
+          '<a href="/login">Return to sign-in</a>',
+        );
+        return;
+      }
+      if (req.method === 'GET' && provider && oauthRoute?.[2] === 'callback') {
+        const { result, clearCookie } = await oauth.complete(
+          provider,
+          url,
+          cookies[oauthName],
+          rawSession,
+        );
+        if (clearCookie) setCookie(res, oauthName, '', 0);
+        if (result.ok) {
+          setCookie(res, sessionName, result.session, 24 * 60 * 60);
+          setCookie(res, pendingName, '', 0);
+          redirect(res, '/account');
+        } else {
+          send(
+            res,
+            result.status,
+            page(
+              'Sign-in not completed.',
+              `<p class="error" role="alert">${escape(result.message)}</p><div class="recovery"><a href="/login">Return to sign-in</a><a href="/account">Return to account</a></div>`,
+              showInbox,
+            ),
+          );
+        }
+        return;
+      }
       // Only the routes below that need a flow pay for the lookup, and only once.
       let pendingFlow: ReturnType<Auth['pending']> | undefined;
       const getPending = () =>
@@ -157,7 +222,7 @@ export async function startApp(config: AppConfig) {
       if (req.method === 'GET' && url.pathname === '/login') {
         const flow = await auth.newFlow();
         setCookie(res, pendingName, flow.cookie, 30 * 60);
-        send(res, 200, loginPage(flow.csrf, showInbox));
+        send(res, 200, loginPage(flow.csrf, showInbox, undefined, methods));
         return;
       }
       if (req.method === 'GET' && url.pathname === '/account') {
@@ -167,10 +232,25 @@ export async function startApp(config: AppConfig) {
           redirect(res, '/login');
           return;
         }
+        const connected = methods.length
+          ? await db
+              .selectFrom('oauth_identities')
+              .select('provider')
+              .where('user_id', '=', session.user_id)
+              .execute()
+          : [];
         send(
           res,
           200,
-          accountPage(session, auth.sessionCsrf(rawSession!), showInbox),
+          accountPage(
+            session,
+            auth.sessionCsrf(rawSession!),
+            showInbox,
+            methods.map((method) => ({
+              ...method,
+              connected: connected.some((row) => row.provider === method.id),
+            })),
+          ),
         );
         return;
       }
@@ -247,6 +327,50 @@ export async function startApp(config: AppConfig) {
         const form = new URLSearchParams(body);
         const csrf = form.get('csrf') ?? '';
         const source = req.socket.remoteAddress ?? 'unknown';
+        if (
+          provider &&
+          (oauthRoute?.[2] === 'start' || oauthRoute?.[2] === 'connect')
+        ) {
+          const linking = oauthRoute[2] === 'connect';
+          const session = linking ? await auth.session(rawSession) : undefined;
+          const pending = linking ? undefined : await getPending();
+          const valid = linking
+            ? session && equalDigest(session.csrf_hash, digest(csrf))
+            : pending && auth.validCsrf(pending, csrf);
+          if (!valid) {
+            fail(
+              res,
+              403,
+              'Request not accepted.',
+              '<p>Return to sign-in or your account and try again.</p>',
+            );
+            return;
+          }
+          try {
+            const result = await oauth.begin(provider, source, session);
+            if (result.ok) {
+              setCookie(res, oauthName, result.cookie, result.seconds);
+              redirect(res, result.url);
+            } else
+              send(
+                res,
+                result.status,
+                page(
+                  'Sign-in not started.',
+                  `<p class="error" role="alert">${escape(result.message)}</p><a href="/login">Return to sign-in</a>`,
+                  showInbox,
+                ),
+              );
+          } catch {
+            fail(
+              res,
+              503,
+              'Sign-in temporarily unavailable.',
+              '<p>Please try again, or sign in with email.</p><a href="/login">Return to sign-in</a>',
+            );
+          }
+          return;
+        }
         if (url.pathname === '/logout') {
           const session = await auth.session(rawSession);
           if (!session || !equalDigest(session.csrf_hash, digest(csrf))) {
@@ -287,6 +411,7 @@ export async function startApp(config: AppConfig) {
                 pending.csrf,
                 showInbox,
                 'Enter a valid email address.',
+                methods,
               ),
             );
             return;
@@ -351,6 +476,7 @@ export async function startApp(config: AppConfig) {
       auth,
       sessionName,
       pendingName,
+      oauthName,
       async close() {
         if (closed) return;
         closed = true;

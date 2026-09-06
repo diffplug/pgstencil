@@ -1,0 +1,27 @@
+{
+  "identities": [
+    {
+      "created_at": "2020-01-01T00:00:00.000Z",
+      "provider": "github",
+      "subject": "12345",
+      "user_id": "ajBfSJtclL7fLjBAiGE7eQ"
+    }
+  ],
+  "sessions": [
+    {
+      "created_at": "2020-01-01T00:00:00.000Z",
+      "csrf_hash": "a0a8273dc60f7b575dd50bf60a70fdb6a4eed4ae96c74ef2cbba416d764a0ebf",
+      "expires_at": "2020-01-02T00:00:00.000Z",
+      "revoked_at": null,
+      "token_hash": "1c26fdb662187cd7e6968e7c423fc5dd9bc85908eb3fc03e311ded72053033a9",
+      "user_id": "ajBfSJtclL7fLjBAiGE7eQ"
+    }
+  ],
+  "users": [
+    {
+      "created_at": "2020-01-01T00:00:00.000Z",
+      "email": "oauth@example.test",
+      "id": "ajBfSJtclL7fLjBAiGE7eQ"
+    }
+  ]
+}

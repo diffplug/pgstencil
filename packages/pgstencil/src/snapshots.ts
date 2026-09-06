@@ -23,7 +23,12 @@ export function stableJson(value: unknown): string {
   );
 }
 export function normalizeOrigin(text: string, origin: string): string {
-  return text.replaceAll(origin, 'https://pgstencil.test');
+  return text
+    .replaceAll(origin, 'https://pgstencil.test')
+    .replaceAll(
+      encodeURIComponent(origin),
+      encodeURIComponent('https://pgstencil.test'),
+    );
 }
 export function htmlToMarkdown(html: string): string {
   const $ = load(html);

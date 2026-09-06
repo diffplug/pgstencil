@@ -1,0 +1,13 @@
+{
+  "headers": {
+    "cache-control": "no-store",
+    "content-security-policy": "default-src 'none'; style-src 'self'; form-action 'self' https://accounts.google.com https://github.com; base-uri 'none'; frame-ancestors 'none'",
+    "location": "https://github.com/login/oauth/authorize?redirect_uri=https%3A%2F%2Fpgstencil.test%2Foauth%2Fgithub%2Fcallback&scope=read%3Auser+user%3Aemail&state=BgBD22MBxvwpI_IaX7FoWyrPy_ljqdCwdSiHIX52pV8&code_challenge=dvHL-azHXLjh-XzxiE7KKpehjsXphvVacOBRNP_MVfk&code_challenge_method=S256&client_id=test-github-client&response_type=code",
+    "referrer-policy": "strict-origin",
+    "set-cookie": [
+      "pgstencil_oauth=CLzxPEDiBC0DvLycd0Q9SxTC8yAlhpTgVa8eN8Q3_3w; Path=/; HttpOnly; SameSite=Lax; Max-Age=600; Expires=Wed, 01 Jan 2020 00:10:00 GMT"
+    ],
+    "x-content-type-options": "nosniff"
+  },
+  "status": 303
+}

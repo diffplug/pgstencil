@@ -5,7 +5,7 @@ import {
   EmailDev,
 } from '../../packages/pgstencil/src/index.ts';
 import { createTestContext } from '../../packages/pgstencil/src/testing.ts';
-import { startApp } from '../../examples/login/src/app.ts';
+import { startApp, type AppConfig } from '../../examples/login/src/app.ts';
 import type {
   CapturedEmail,
   EmailSender,
@@ -21,8 +21,12 @@ export interface LoginTarget {
   origin: string;
   email: { next(timeoutMs?: number): Promise<CapturedEmail> };
 }
+type AppOptions = Pick<
+  AppConfig,
+  'oauth' | 'oauthFetch' | 'publicOrigin' | 'secureCookies'
+>;
 export async function fixture(
-  options: { seed?: string; email?: EmailSender } = {},
+  options: { seed?: string; email?: EmailSender } & AppOptions = {},
 ) {
   const context = await createTestContext(
     options.seed ? { seed: options.seed } : {},
@@ -36,12 +40,13 @@ export async function fixture(
       devInbox: context.email,
       secret: SECRET,
       development: true,
+      ...appOptions(options),
     });
     return {
       ...context,
       app,
       client: request.agent(app.origin),
-      origin: app.origin,
+      origin: app.publicOrigin,
       async close() {
         await app.close();
         await context.close();
@@ -57,7 +62,11 @@ export type Fixture = Awaited<ReturnType<typeof fixture>>;
  * A second server on an existing database, for proving that state shared
  * through Postgres is shared. It borrows the database, so it leases nothing.
  */
-export async function secondApp(f: Fixture, seed: string) {
+export async function secondApp(
+  f: Fixture,
+  seed: string,
+  options: AppOptions = {},
+) {
   const time = new DevTime();
   const random = new DevRandom(seed);
   const email = new EmailDev(time);
@@ -69,6 +78,7 @@ export async function secondApp(f: Fixture, seed: string) {
     devInbox: email,
     secret: SECRET,
     development: true,
+    ...options,
   });
   return {
     app,
@@ -76,11 +86,24 @@ export async function secondApp(f: Fixture, seed: string) {
     random,
     email,
     client: request.agent(app.origin),
-    origin: app.origin,
+    origin: app.publicOrigin,
     async close() {
       await app.close();
       email.close();
     },
+  };
+}
+function appOptions({
+  oauth,
+  oauthFetch,
+  publicOrigin,
+  secureCookies,
+}: AppOptions): AppOptions {
+  return {
+    ...(oauth === undefined ? {} : { oauth }),
+    ...(oauthFetch === undefined ? {} : { oauthFetch }),
+    ...(publicOrigin === undefined ? {} : { publicOrigin }),
+    ...(secureCookies === undefined ? {} : { secureCookies }),
   };
 }
 export function field(html: string, name: string): string {

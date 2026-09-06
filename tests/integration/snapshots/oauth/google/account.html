@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>You’re signed in. · pgstencil</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<!-- THESIS: One sign-in task with clear recovery. OWN-WORLD: Warm paper and forest native forms. STORY: Email, verify, account, logout. FIRST VIEWPORT: Heading, instruction, labeled control, submit, recovery. FORM: Native HTML, no client JavaScript; seed 93f1c640. FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md. -->
+<header><a class="wordmark" href="/login" aria-label="pgstencil home">pgstencil<span aria-hidden="true">.</span></a><a class="dev-link" href="/dev/emails">Local inbox</a></header>
+<main id="main"><h1>You’re signed in.</h1><p class="intro">Welcome, <strong>oauth@example.test</strong>.</p><dl><dt>Signed in</dt><dd>Jan 1, 2020, 12:00 AM UTC</dd><dt>Session expires</dt><dd>Jan 2, 2020, 12:00 AM UTC</dd></dl><form method="post" action="/logout"><input type="hidden" name="csrf" value="48c0b12052ee67b06e0e0a7aa1712d31866c34102394381acbc49502a464fc55"><button type="submit">Sign out</button></form><fieldset class="providers"><legend>Connected sign-in methods</legend><p>Google is connected.</p><form method="post" action="/oauth/github/connect"><input type="hidden" name="csrf" value="48c0b12052ee67b06e0e0a7aa1712d31866c34102394381acbc49502a464fc55"><button class="provider-button" type="submit">Connect GitHub</button></form><p class="note">To connect a provider, sign in within the last five minutes and use the same verified email address.</p></fieldset></main>
+<footer>pgstencil <span>Simple sign-in. Your email is your key.</span></footer>
+</body></html>

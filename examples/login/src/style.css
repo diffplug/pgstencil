@@ -133,6 +133,27 @@ button:disabled {
   color: var(--muted);
   font-size: 14px;
 }
+.providers {
+  padding: 20px 0 0;
+  margin: 36px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.providers legend {
+  padding-right: 12px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.providers .provider-button {
+  margin-top: 12px;
+  background: #fffefa;
+  color: var(--ink);
+  border: 1px solid #84968a;
+  justify-content: center;
+}
+.providers .provider-button:hover {
+  background: #e8ede6;
+}
 .note {
   margin-top: 24px;
 }

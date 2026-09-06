@@ -40,16 +40,38 @@ export function page(title: string, body: string, showInbox: boolean): string {
 export function errorMessage(message?: string): string {
   return message ? `<p class="error" role="alert">${escape(message)}</p>` : '';
 }
+export interface SignInMethod {
+  id: string;
+  label: string;
+  connected?: boolean;
+}
+function providerForms(
+  methods: readonly SignInMethod[],
+  csrf: string,
+  connecting: boolean,
+): string {
+  if (!methods.length) return '';
+  return `<fieldset class="providers"><legend>${connecting ? 'Connected sign-in methods' : 'Or continue with'}</legend>${methods
+    .map((method) =>
+      method.connected
+        ? `<p>${escape(method.label)} is connected.</p>`
+        : `<form method="post" action="/oauth/${escape(method.id)}/${connecting ? 'connect' : 'start'}">${hidden('csrf', csrf)}<button class="provider-button" type="submit">${connecting ? 'Connect' : 'Continue with'} ${escape(method.label)}</button></form>`,
+    )
+    .join(
+      '',
+    )}${connecting ? '<p class="note">To connect a provider, sign in within the last five minutes and use the same verified email address.</p>' : ''}</fieldset>`;
+}
 export function loginPage(
   csrf: string,
   showInbox: boolean,
   message?: string,
+  providers: readonly SignInMethod[] = [],
 ): string {
   return page(
     'Welcome in.',
     `<p class="intro">Sign in with your email. We’ll send you a code and a link—use whichever you prefer.</p>${errorMessage(message)}
 <form method="post" action="/login">${hidden('csrf', csrf)}<label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required><button type="submit">Send sign-in code</button></form>
-<p class="note">New here? Your account is created when you verify your email.</p>`,
+<p class="note">New here? Your account is created when you verify your email.</p>${providerForms(providers, csrf, false)}`,
     showInbox,
   );
 }
@@ -96,10 +118,11 @@ export function accountPage(
   account: { email: string; created_at: Date; expires_at: Date },
   csrf: string,
   showInbox: boolean,
+  providers: readonly SignInMethod[] = [],
 ): string {
   return page(
     'You’re signed in.',
-    `<p class="intro">Welcome, <strong>${escape(account.email)}</strong>.</p><dl><dt>Signed in</dt><dd>${escape(date(account.created_at))}</dd><dt>Session expires</dt><dd>${escape(date(account.expires_at))}</dd></dl><form method="post" action="/logout">${hidden('csrf', csrf)}<button type="submit">Sign out</button></form>`,
+    `<p class="intro">Welcome, <strong>${escape(account.email)}</strong>.</p><dl><dt>Signed in</dt><dd>${escape(date(account.created_at))}</dd><dt>Session expires</dt><dd>${escape(date(account.expires_at))}</dd></dl><form method="post" action="/logout">${hidden('csrf', csrf)}<button type="submit">Sign out</button></form>${providerForms(providers, csrf, true)}`,
     showInbox,
   );
 }

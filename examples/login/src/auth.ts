@@ -304,24 +304,7 @@ export class Auth {
         )
         .returning('id')
         .executeTakeFirstOrThrow();
-      if (priorSession)
-        await trx
-          .updateTable('sessions')
-          .set({ revoked_at: now })
-          .where('token_hash', '=', digest(priorSession))
-          .execute();
-      const session = token(random);
-      await trx
-        .insertInto('sessions')
-        .values({
-          token_hash: digest(session),
-          user_id: user.id,
-          csrf_hash: digest(this.sessionCsrf(session)),
-          created_at: now,
-          expires_at: new Date(now.getTime() + SESSION_MS),
-          revoked_at: null,
-        })
-        .execute();
+      const session = await this.issueSession(trx, user.id, priorSession, now);
       await trx
         .updateTable('login_flows')
         .set({ expires_at: now })
@@ -329,6 +312,40 @@ export class Auth {
         .execute();
       return { ok: true, session };
     });
+  }
+  /** Shared session issuance after an email or OAuth proof has been verified. */
+  async issueSession(
+    trx: Transaction<DB>,
+    userId: string,
+    priorSession: string | undefined,
+    now = this.deps.time.now(),
+  ): Promise<string> {
+    if (priorSession)
+      await trx
+        .updateTable('sessions')
+        .set({ revoked_at: now })
+        .where('token_hash', '=', digest(priorSession))
+        .execute();
+    const session = token(this.deps.random);
+    await trx
+      .insertInto('sessions')
+      .values({
+        token_hash: digest(session),
+        user_id: userId,
+        csrf_hash: digest(this.sessionCsrf(session)),
+        created_at: now,
+        expires_at: new Date(now.getTime() + SESSION_MS),
+        revoked_at: null,
+      })
+      .execute();
+    return session;
+  }
+  async allowOAuthStart(source: string): Promise<boolean> {
+    return this.deps.db
+      .transaction()
+      .execute((trx) =>
+        this.rate(trx, [{ key: `oauth:ip:${source}`, limit: 30 }]),
+      );
   }
   async session(
     raw: string | undefined,

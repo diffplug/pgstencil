@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { generateTypes } from './generate-types.ts';
 import {
   allocateDatabase,
   ensureServices,
@@ -34,22 +35,13 @@ if (command === 'create') {
   const lease = await allocateDatabase();
   try {
     if (command === 'types') {
-      const args = [
-        'exec',
-        'kysely-codegen',
-        '--url',
-        'env(DATABASE_URL)',
-        '--out-file',
-        'examples/login/src/db.generated.ts',
-        '--include-pattern',
-        'public.(users|login_flows|login_challenges|sessions|rate_limits)',
-      ];
-      if (process.argv.includes('--verify')) args.push('--verify');
-      const result = await exec('pnpm', args, {
-        cwd: projectRoot,
-        env: { ...process.env, DATABASE_URL: lease.url },
-      });
-      console.log(result.stdout.trim());
+      console.log(
+        await generateTypes(
+          lease.url,
+          'examples/login/src/db.generated.ts',
+          process.argv.includes('--verify'),
+        ),
+      );
     } else {
       const services = await ensureServices();
       const result = await exec(

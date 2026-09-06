@@ -1,10 +1,12 @@
-import { DevTime, DevRandom, EmailDev } from 'pgstencil';
+import { DevTime, SystemTime, DevRandom, EmailDev } from 'pgstencil';
 import { randomUUID } from 'node:crypto';
 import { developmentDatabase } from 'pgstencil/database';
 import { startApp } from './app.ts';
 // Browsers use their own clock for cookies. Historical dates belong in the
 // tests, which explicitly replay cookies to exercise server-side expiration.
-const time = new DevTime(process.env.PGSTENCIL_TIME ?? new Date());
+const time = process.env.PGSTENCIL_TIME
+  ? new DevTime(process.env.PGSTENCIL_TIME)
+  : new SystemTime();
 // The development database survives restarts; a fresh seed avoids reusing IDs.
 const random = new DevRandom(process.env.PGSTENCIL_SEED ?? randomUUID());
 const email = new EmailDev(time);

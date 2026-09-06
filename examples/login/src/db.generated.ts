@@ -34,6 +34,25 @@ export interface LoginFlows {
   id: string;
 }
 
+export interface OauthFlows {
+  browser_hash: string;
+  consumed_at: Timestamp | null;
+  created_at: Timestamp;
+  expires_at: Timestamp;
+  link_session_hash: string | null;
+  link_user_id: string | null;
+  provider: string;
+  redirect_uri: string;
+  state_hash: string;
+}
+
+export interface OauthIdentities {
+  created_at: Timestamp;
+  provider: string;
+  subject: string;
+  user_id: string;
+}
+
 export interface RateLimits {
   count: number;
   key: string;
@@ -58,6 +77,8 @@ export interface Users {
 export interface DB {
   login_challenges: LoginChallenges;
   login_flows: LoginFlows;
+  oauth_flows: OauthFlows;
+  oauth_identities: OauthIdentities;
   rate_limits: RateLimits;
   sessions: Sessions;
   users: Users;

@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "pgstencil": "workspace:*",
     "kysely": "0.29.5",
-    "pg": "^8.16.0"
+    "openid-client": "6.8.8",
+    "pg": "^8.16.0",
+    "pgstencil": "workspace:*"
   }
 }

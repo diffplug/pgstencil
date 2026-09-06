@@ -56,6 +56,38 @@ CREATE TABLE public.login_flows (
 
 
 --
+-- Name: oauth_flows; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.oauth_flows (
+    state_hash text NOT NULL,
+    provider text NOT NULL,
+    browser_hash text NOT NULL,
+    redirect_uri text NOT NULL,
+    link_user_id text,
+    link_session_hash text,
+    created_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    consumed_at timestamp with time zone,
+    CONSTRAINT oauth_flows_check CHECK (((link_user_id IS NULL) = (link_session_hash IS NULL))),
+    CONSTRAINT oauth_flows_provider_check CHECK ((provider = ANY (ARRAY['google'::text, 'github'::text])))
+);
+
+
+--
+-- Name: oauth_identities; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.oauth_identities (
+    provider text NOT NULL,
+    subject text NOT NULL,
+    user_id text NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT oauth_identities_provider_check CHECK ((provider = ANY (ARRAY['google'::text, 'github'::text])))
+);
+
+
+--
 -- Name: pgmigrations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -157,6 +189,30 @@ ALTER TABLE ONLY public.login_flows
 
 
 --
+-- Name: oauth_flows oauth_flows_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.oauth_flows
+    ADD CONSTRAINT oauth_flows_pkey PRIMARY KEY (state_hash);
+
+
+--
+-- Name: oauth_identities oauth_identities_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.oauth_identities
+    ADD CONSTRAINT oauth_identities_pkey PRIMARY KEY (provider, subject);
+
+
+--
+-- Name: oauth_identities oauth_identities_user_id_provider_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.oauth_identities
+    ADD CONSTRAINT oauth_identities_user_id_provider_key UNIQUE (user_id, provider);
+
+
+--
 -- Name: pgmigrations pgmigrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -212,11 +268,42 @@ CREATE INDEX login_challenges_flow ON public.login_challenges USING btree (flow_
 
 
 --
+-- Name: oauth_flows_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX oauth_flows_expiry ON public.oauth_flows USING btree (expires_at);
+
+
+--
 -- Name: login_challenges login_challenges_flow_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.login_challenges
     ADD CONSTRAINT login_challenges_flow_id_fkey FOREIGN KEY (flow_id) REFERENCES public.login_flows(id) ON DELETE CASCADE;
+
+
+--
+-- Name: oauth_flows oauth_flows_link_session_hash_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.oauth_flows
+    ADD CONSTRAINT oauth_flows_link_session_hash_fkey FOREIGN KEY (link_session_hash) REFERENCES public.sessions(token_hash);
+
+
+--
+-- Name: oauth_flows oauth_flows_link_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.oauth_flows
+    ADD CONSTRAINT oauth_flows_link_user_id_fkey FOREIGN KEY (link_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: oauth_identities oauth_identities_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.oauth_identities
+    ADD CONSTRAINT oauth_identities_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
 
 
 --

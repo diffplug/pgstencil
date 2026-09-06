@@ -147,6 +147,8 @@ Fields, primary buttons and error messages share softly rounded control corners.
 
 Primary actions span the form width, with semibold white text on forest green. Hover and active states darken the background; disabled styling changes the fill and cursor. Text buttons use underlined accent text and share link hover behavior. All actions expose keyboard focus.
 
+Optional Google/GitHub actions use full-width bordered controls with a light surface and forest ink below the email form. A fieldset legend labels the alternatives. Account pages use the same controls for connecting providers and plain text for already connected methods. These are native POST forms with shared focus styling; no external logos or scripts are loaded.
+
 ### Inputs / Fields
 
 Visible labels precede full-width light fields. Email input uses native email semantics and autocomplete. Code entry remains a single text field with numeric input hints, one-time-code autocomplete and an associated expiry note. Preserve leading zeroes and pasted spacing.

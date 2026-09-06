@@ -12,7 +12,7 @@ TypeScript/pnpm; server-rendered HTML forms, Node HTTP, Postgres, IntegreSQL, Ky
 
 ## Users
 
-Developers building Postgres websites and users signing in to the example by email code or link.
+Developers building Postgres websites and users signing in to the example by email code/link, Google, or GitHub.
 
 ## Product Purpose
 
@@ -20,7 +20,7 @@ Make real-database tests parallel, readable and deterministic through isolated d
 
 ## Capabilities and Constraints
 
-The approved login flow in LOGIN_FLOW.md is the product brief. Works without client JavaScript. The user has explicitly approved implementation; focus on this small functional example rather than introducing a brand-design project.
+The approved login flows in LOGIN_FLOW.md and OAUTH.md are the product brief. Works without client JavaScript. Providers are optional and existing accounts explicitly connect new sign-in methods. The user has explicitly approved implementation; focus on this small functional example rather than introducing a brand-design project.
 
 ## Brand Commitments
 

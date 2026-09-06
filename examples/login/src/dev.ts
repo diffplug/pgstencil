@@ -2,6 +2,16 @@ import { DevTime, SystemTime, DevRandom, EmailDev } from 'pgstencil';
 import { randomUUID } from 'node:crypto';
 import { developmentDatabase } from 'pgstencil/database';
 import { startApp } from './app.ts';
+import { oauthFromEnvironment } from './oauth-providers.ts';
+const oauth = oauthFromEnvironment(process.env);
+const publicOrigin = process.env.PUBLIC_ORIGIN;
+const port = Number(process.env.PORT ?? 0);
+if (!Number.isInteger(port) || port < 0 || port > 65535)
+  throw new Error('PORT must be an integer from 0 to 65535');
+if (Object.keys(oauth).length && (!publicOrigin || port === 0))
+  throw new Error(
+    'Set PUBLIC_ORIGIN and PORT to the origin registered with your OAuth providers',
+  );
 // Browsers use their own clock for cookies. Historical dates belong in the
 // tests, which explicitly replay cookies to exercise server-side expiration.
 const time = process.env.PGSTENCIL_TIME
@@ -18,7 +28,9 @@ const app = await startApp({
   devInbox: email,
   secret: 'pgstencil-local-development-secret-only',
   development: true,
-  port: Number(process.env.PORT ?? 0),
+  port,
+  oauth,
+  ...(publicOrigin ? { publicOrigin } : {}),
 });
 console.log(
   `pgstencil: ${app.origin}\nLocal inbox: ${app.origin}/dev/emails\nServer time: ${time.now().toISOString()}`,

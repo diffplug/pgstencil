@@ -2,6 +2,8 @@
 
 Status: implemented example behavior; the integration tests cover the core success, expiry, replay, concurrency, rate-limit, CSRF, cookie and delivery-failure scenarios. This example exercises pgstencil's database, HTTP, email, snapshot, time, and randomness infrastructure. Pages are server-rendered forms and work without client JavaScript.
 
+The example also supports optional Google and GitHub login, sharing these application sessions. [OAUTH.md](OAUTH.md) defines provider setup, browser-bound attempts, explicit linking, and local protocol tests. This document describes the email path.
+
 ## User flow
 
 1. **Enter an email.** `/login` shows an email field and “Send sign-in code”. The example supports both new and returning users: create an account only after verifying mailbox access. A submitted address gets the same response shape regardless of whether an account already exists.

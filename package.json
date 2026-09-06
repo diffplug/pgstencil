@@ -7,7 +7,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "tsx examples/login/src/dev.ts",
+    "dev": "node --env-file-if-exists=.env --import tsx examples/login/src/dev.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",

@@ -54,10 +54,10 @@ export async function createStripeDev(
     });
     // Reads outnumber writes here; skip the rewrite when nothing changed.
     if (text === saved) return;
-    saved = text;
     mkdirSync(dirname(statePath), { recursive: true });
     writeFileSync(`${statePath}.tmp`, text, { mode: 0o600 });
     renameSync(`${statePath}.tmp`, statePath);
+    saved = text;
   }
   const prices = { monthly: 'price_dev_monthly', yearly: 'price_dev_yearly' };
   const webhookSecret = 'whsec_pgstencil_local_only';
@@ -196,13 +196,11 @@ export async function createStripeDev(
           else completeCheckout(session.id);
           if (webhookTarget) await deliver(webhookTarget);
           const success = new URL(
-            parameters.get(session.id)!.get('success_url')!,
+            parameters
+              .get(session.id)!
+              .get('success_url')!
+              .replaceAll('{CHECKOUT_SESSION_ID}', session.id),
           );
-          if (webhookTarget) {
-            const target = new URL(webhookTarget);
-            success.protocol = target.protocol;
-            success.host = target.host;
-          }
           res
             .writeHead(303, {
               location: success.href,

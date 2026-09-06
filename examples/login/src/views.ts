@@ -30,6 +30,7 @@ export function page(title: string, body: string, development = false): string {
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)} · pgstencil</title><link rel="stylesheet" href="/style.css"></head>
 <body>
+<!-- THESIS: One sign-in task with clear recovery. OWN-WORLD: Warm paper and forest native forms. STORY: Email, verify, account, logout. FIRST VIEWPORT: Heading, instruction, labeled control, submit, recovery. FORM: Native HTML, no client JavaScript; seed 93f1c640. FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md. -->
 <header><a class="wordmark" href="/login" aria-label="pgstencil home">pgstencil<span aria-hidden="true">.</span></a>${development ? '<a class="dev-link" href="/dev/emails">Local inbox</a>' : ''}</header>
 <main id="main"><h1>${escape(title)}</h1>${body}</main>
 <footer>pgstencil <span>Simple sign-in. Your email is your key.</span></footer>
@@ -46,7 +47,7 @@ export function loginPage(
   return page(
     'Welcome in.',
     `<p class="intro">Sign in with your email. We’ll send you a code and a link—use whichever you prefer.</p>${errorMessage(message)}
-<form method="post" action="/login">${hidden('csrf', csrf)}<label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required><button type="submit">Send sign-in code <span aria-hidden="true">→</span></button></form>
+<form method="post" action="/login">${hidden('csrf', csrf)}<label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required><button type="submit">Send sign-in code</button></form>
 <p class="note">New here? Your account is created when you verify your email.</p>`,
     development,
   );
@@ -60,7 +61,7 @@ export function codePage(
   return page(
     'Check your email.',
     `<p class="intro">Enter the code we sent to <strong>${escape(email)}</strong>, or open the sign-in link in that email.</p>${errorMessage(message)}
-<form method="post" action="/login/code">${hidden('csrf', csrf)}<label for="code">Sign-in code</label><input id="code" class="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9\\s]{8,16}" maxlength="16" placeholder="0000 0000" aria-describedby="expiry" required><p id="expiry" class="field-note">Your code expires in 10 minutes.</p><button type="submit">Verify code <span aria-hidden="true">→</span></button></form>
+<form method="post" action="/login/code">${hidden('csrf', csrf)}<label for="code">Sign-in code</label><input id="code" class="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9\\s]{8,16}" maxlength="16" placeholder="0000 0000" aria-describedby="expiry" required><p id="expiry" class="field-note">Your code expires in 10 minutes.</p><button type="submit">Verify code</button></form>
 <div class="recovery"><form method="post" action="/login/resend">${hidden('csrf', csrf)}<button class="text-button" type="submit">Send a new code</button></form><a href="/login">Use another email</a></div><p class="note">You can request another code after one minute. Only the newest code will work.</p>`,
     development,
   );
@@ -74,7 +75,19 @@ export function confirmPage(
 ): string {
   return page(
     'Ready to sign in?',
-    `<p class="intro">Continue as <strong>${escape(email)}</strong>.</p><form method="post" action="/login/link">${hidden('csrf', csrf)}${hidden('id', id)}${hidden('token', linkToken)}<button type="submit">Confirm sign-in <span aria-hidden="true">→</span></button></form><p class="note">This link works once, in the browser where you requested it.</p><a href="/login">Use another email</a>`,
+    `<p class="intro">Continue as <strong>${escape(email)}</strong>.</p><form method="post" action="/login/link">${hidden('csrf', csrf)}${hidden('id', id)}${hidden('token', linkToken)}<button type="submit">Confirm sign-in</button></form><p class="note">This link works once, in the browser where you requested it.</p><a href="/login">Use another email</a>`,
+    development,
+  );
+}
+export function sendFailurePage(
+  email: string,
+  csrf: string,
+  message: string,
+  development = false,
+): string {
+  return page(
+    'No new email sent.',
+    `<p class="intro">We couldn’t send a new sign-in email to <strong>${escape(email)}</strong>.</p>${errorMessage(message)}<form method="post" action="/login">${hidden('csrf', csrf)}${hidden('email', email)}<button type="submit">Try sending again</button></form><div class="recovery"><a href="/login/code">Enter an existing code</a><a href="/login">Use another email</a></div>`,
     development,
   );
 }

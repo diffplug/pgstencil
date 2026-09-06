@@ -107,12 +107,10 @@ export class Auth {
           window_start: fresh ? now : previous.window_start,
         })
         .onConflict((c) =>
-          c
-            .column('key')
-            .doUpdateSet({
-              count,
-              window_start: fresh ? now : previous.window_start,
-            }),
+          c.column('key').doUpdateSet({
+            count,
+            window_start: fresh ? now : previous.window_start,
+          }),
         )
         .execute();
     }

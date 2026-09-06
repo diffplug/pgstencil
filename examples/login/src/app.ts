@@ -5,7 +5,7 @@ import {
 } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { once } from 'node:events';
-import { connectDatabase } from 'pgstencil/database';
+import { connectDatabase } from 'pgstencil/postgres';
 import {
   type Time,
   type RandomSource,
@@ -30,6 +30,7 @@ import {
   date,
   hidden,
   loginEmail,
+  sendFailurePage,
 } from './views.ts';
 export interface AppConfig {
   databaseUrl: string;
@@ -45,6 +46,13 @@ export interface AppConfig {
 export async function startApp(config: AppConfig) {
   const development = config.development === true;
   const secure = config.secureCookies ?? !development;
+  if (
+    config.publicOrigin &&
+    new URL(config.publicOrigin).origin !== config.publicOrigin
+  )
+    throw new Error(
+      'publicOrigin must contain only scheme, host and optional port',
+    );
   if (!development && (!secure || !config.publicOrigin?.startsWith('https://')))
     throw new Error(
       'Production requires HTTPS publicOrigin and Secure cookies',
@@ -106,7 +114,9 @@ export async function startApp(config: AppConfig) {
   }
   async function handle(req: IncomingMessage, res: ServerResponse) {
     res.setHeader('cache-control', 'no-store');
-    res.setHeader('referrer-policy', 'no-referrer');
+    // no-referrer also nulls Origin on native form POSTs. strict-origin
+    // preserves CSRF origin checks while never disclosing paths/link tokens.
+    res.setHeader('referrer-policy', 'strict-origin');
     res.setHeader('x-content-type-options', 'nosniff');
     res.setHeader(
       'content-security-policy',
@@ -326,7 +336,7 @@ export async function startApp(config: AppConfig) {
           send(
             res,
             result.status,
-            codePage(email, pending.csrf, result.message, development),
+            sendFailurePage(email, pending.csrf, result.message, development),
           );
         return;
       }

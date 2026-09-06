@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./database": "./src/database.ts",
     "./snapshots": "./src/snapshots.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./postgres": "./src/postgres.ts"
   },
   "dependencies": {
     "pg": "^8.16.0",

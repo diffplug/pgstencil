@@ -274,12 +274,14 @@ test('failed email delivery leaves an unusable challenge', async ({
   });
   onTestFinished(() => f.close());
   const start = await f.client.get('/login');
-  await post(
+  const failure = await post(
     f,
     '/login',
     { csrf: field(start.text, 'csrf'), email: 'alice@example.test' },
     cookies(start),
   ).expect(503);
+  expect(failure.text).toContain('No new email sent.');
+  expect(failure.text).not.toContain('we sent');
   const challenge = await f.app.db
     .selectFrom('login_challenges')
     .selectAll()

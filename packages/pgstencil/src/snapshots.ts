@@ -55,23 +55,39 @@ export function htmlToMarkdown(html: string): string {
     filter: 'table',
     replacement: (_content, node) => {
       const table = load(node.outerHTML);
+      const rows = table('tr')
+        .map(
+          (_i, row) =>
+            '| ' +
+            table(row)
+              .find('th,td')
+              .map((_j, cell) =>
+                turndown
+                  .turndown(table(cell).html() ?? '')
+                  .trim()
+                  .replaceAll('|', '\\|')
+                  .replaceAll('\n', '<br>'),
+              )
+              .get()
+              .join(' | ') +
+            ' |',
+        )
+        .get();
+      if (!rows.length) return '';
+      const columns = table('tr').first().find('th,td').length;
+      const separator =
+        '| ' + Array.from({ length: columns }, () => '---').join(' | ') + ' |';
+      // Treat the first row as the header, matching GitHub Markdown tables.
       return (
-        '\n\n' +
-        table('tr')
-          .map(
-            (_i, row) =>
-              '| ' +
-              table(row)
-                .find('th,td')
-                .map((_j, cell) => table(cell).text().replaceAll('|', '\\|'))
-                .get()
-                .join(' | ') +
-              ' |',
-          )
-          .get()
-          .join('\n') +
-        '\n\n'
+        '\n\n' + [rows[0], separator, ...rows.slice(1)].join('\n') + '\n\n'
       );
+    },
+  });
+  turndown.addRule('frames', {
+    filter: 'iframe',
+    replacement: (_content, node) => {
+      const frame = load(node.outerHTML)('iframe');
+      return `\n\n[${frame.attr('title') ?? 'Embedded content'}](${frame.attr('src') ?? ''})\n\n`;
     },
   });
   return turndown.turndown(selected ?? '').trim() + '\n';
@@ -109,8 +125,9 @@ export function captureResponse(
   };
 }
 export function captureEmail(email: CapturedEmail, origin: string): string {
+  const { html, text, subject, ...metadata } = email;
   return normalizeOrigin(
-    `# ${email.subject}\n\n${stableJson({ from: email.from, to: email.to, capturedAt: email.capturedAt })}\n## Plaintext\n\n${email.text}\n\n## Markdown\n\n${htmlToMarkdown(email.html)}\n## HTML\n\n${email.html}\n`,
+    `# ${subject}\n\n${stableJson(metadata)}\n## Plaintext\n\n${text}\n\n## Markdown\n\n${htmlToMarkdown(html)}\n## HTML\n\n${html}\n`,
     origin,
   );
 }

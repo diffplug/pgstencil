@@ -5,7 +5,11 @@ export default defineConfig({
     testTimeout: 60000,
     hookTimeout: 120000,
     maxWorkers: 4,
-    update: process.env.PGSTENCIL_UPDATE === '1',
+    update: process.env.PGSTENCIL_UPDATE === '1' ? 'all' : 'none',
+    forceRerunTriggers: [
+      '**/examples/login/migrations/*.sql',
+      '**/compose.yaml',
+    ],
     sequence: { concurrent: false },
   },
 });

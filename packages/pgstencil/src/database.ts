@@ -7,7 +7,8 @@ import {
   type StartedDockerComposeEnvironment,
 } from 'testcontainers';
 import pg from 'pg';
-import { Kysely, PostgresDialect } from 'kysely';
+import { queryDatabase } from './postgres.ts';
+export { connectDatabase, queryDatabase } from './postgres.ts';
 import {
   migrate,
   migrationFingerprint,
@@ -224,24 +225,6 @@ export interface DatabaseLease {
   hash: string;
   id: number;
   close(): Promise<void>;
-}
-export function connectDatabase<DB>(url: string): Kysely<DB> {
-  return new Kysely<DB>({
-    dialect: new PostgresDialect({
-      pool: new pg.Pool({ connectionString: url, max: 2 }),
-    }),
-  });
-}
-export async function queryDatabase<
-  Row extends pg.QueryResultRow = pg.QueryResultRow,
->(url: string, text: string, values: unknown[] = []): Promise<Row[]> {
-  const client = new pg.Client({ connectionString: url });
-  await client.connect();
-  try {
-    return (await client.query<Row>(text, values)).rows;
-  } finally {
-    await client.end();
-  }
 }
 export async function developmentDatabase(
   applyMigrations = true,

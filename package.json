@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
-    "snapshot:update": "PGSTENCIL_UPDATE=1 vitest run -u",
+    "snapshot:update": "node --import tsx scripts/update-snapshots.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

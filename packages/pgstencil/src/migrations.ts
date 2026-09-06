@@ -11,8 +11,16 @@ export interface MigrationFile {
   hash: string;
 }
 export async function readMigrations(
-  directory: string,
+  directory: string | readonly string[],
 ): Promise<MigrationFile[]> {
+  if (typeof directory !== 'string') {
+    const files = (await Promise.all(directory.map(readMigrations)))
+      .flat()
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (new Set(files.map((file) => file.name)).size !== files.length)
+      throw new Error('Migration sources contain duplicate filenames');
+    return files;
+  }
   const names = (await readdir(directory))
     .filter((name) => name.endsWith('.sql'))
     .sort();

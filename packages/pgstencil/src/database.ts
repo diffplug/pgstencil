@@ -131,7 +131,7 @@ function hostUrl(services: Services, database: string): string {
 }
 let composeSource: Promise<string> | undefined;
 export async function prepareTemplate(
-  directory = defaultMigrations,
+  directory: string | readonly string[] = defaultMigrations,
 ): Promise<{ services: Services; hash: string }> {
   // Independent reads; vitest reruns the process when either input changes.
   const [services, files, compose] = await Promise.all([
@@ -195,7 +195,7 @@ export async function prepareTemplate(
   return { services, hash };
 }
 export async function allocateDatabase(
-  directory = defaultMigrations,
+  directory: string | readonly string[] = defaultMigrations,
 ): Promise<DatabaseLease> {
   const { services, hash } = await prepareTemplate(directory);
   const response = await api(services, `/templates/${hash}/tests`);
@@ -233,6 +233,7 @@ export interface DatabaseLease {
 }
 export async function developmentDatabase(
   applyMigrations = true,
+  directory: string | readonly string[] = defaultMigrations,
 ): Promise<string> {
   const services = await ensureServices();
   await withProcessLock(join(stateDirectory, 'dev-db.lock'), async () => {
@@ -246,8 +247,7 @@ export async function developmentDatabase(
     });
   });
   const url = hostUrl(services, developmentDatabaseName);
-  if (applyMigrations)
-    await migrate(url, await readMigrations(defaultMigrations));
+  if (applyMigrations) await migrate(url, await readMigrations(directory));
   return url;
 }
 /** Databases pgstencil owns that currently have client connections. */

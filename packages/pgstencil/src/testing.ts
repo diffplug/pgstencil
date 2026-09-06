@@ -4,7 +4,11 @@ import { EmailDev } from './email.ts';
 import { allocateDatabase } from './database.ts';
 /** Owns independent infrastructure; callers register close() with their test runner. */
 export async function createTestContext(
-  options: { seed?: string; now?: string; migrations?: string } = {},
+  options: {
+    seed?: string;
+    now?: string;
+    migrations?: string | readonly string[];
+  } = {},
 ) {
   const time = new DevTime(options.now);
   const random = new DevRandom(options.seed);

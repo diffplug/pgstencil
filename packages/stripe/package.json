@@ -1,0 +1,16 @@
+{
+  "name": "@pgstencil/stripe",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts",
+    "./migrations": "./src/migrations.ts"
+  },
+  "dependencies": {
+    "pgstencil": "workspace:*",
+    "kysely": "0.29.5",
+    "stripe": "22.6.1"
+  }
+}

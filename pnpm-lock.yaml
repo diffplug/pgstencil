@@ -75,6 +75,18 @@ importers:
         specifier: ^7.2.0
         version: 7.2.4
 
+  packages/stripe:
+    dependencies:
+      kysely:
+        specifier: 0.29.5
+        version: 0.29.5
+      pgstencil:
+        specifier: workspace:*
+        version: link:../pgstencil
+      stripe:
+        specifier: 22.6.1
+        version: 22.6.1(@types/node@24.13.3)
+
 packages:
 
   '@babel/code-frame@7.29.7':
@@ -1619,6 +1631,15 @@ packages:
   strip-ansi@7.2.0:
     resolution: {integrity: sha512-yDPMNjp4WyfYBkHnjIRLfca1i6KMyGCtsVgoKe/z1+6vukgaENdgGBZt+ZmKPc4gavvEZ5OgHfHdrazhgNyG7w==}
     engines: {node: '>=12'}
+
+  stripe@22.6.1:
+    resolution: {integrity: sha512-hAKSkGeVt2u46TRYhmnvwmVHxBNtOCJnPjc+SH5sP2B2ypElYzAAY3Ljx0Ar8C2w8nfpFQiZ95qoDCDsFkXMTA==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@types/node': '>=18'
+    peerDependenciesMeta:
+      '@types/node':
+        optional: true
 
   superagent@10.3.0:
     resolution: {integrity: sha512-B+4Ik7ROgVKrQsXTV0Jwp2u+PXYLSlqtDAhYnkkD+zn3yg8s/zjA2MeGayPoY/KICrbitwneDHrjSotxKL+0XQ==}
@@ -3307,6 +3328,10 @@ snapshots:
   strip-ansi@7.2.0:
     dependencies:
       ansi-regex: 6.3.0
+
+  stripe@22.6.1(@types/node@24.13.3):
+    optionalDependencies:
+      '@types/node': 24.13.3
 
   superagent@10.3.0:
     dependencies:

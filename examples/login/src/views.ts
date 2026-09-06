@@ -4,34 +4,35 @@
  * Palette: warm paper, dark forest ink, restrained green controls.
  */
 import type { EmailMessage } from 'pgstencil';
+const ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
 export function escape(value: unknown): string {
-  return String(value).replace(
-    /[&<>"']/g,
-    (ch) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
-        ch
-      ]!,
-  );
+  return String(value).replace(/[&<>"']/g, (ch) => ESCAPES[ch]!);
 }
+// Locale resolution is the expensive part; build the formatter once.
+const UTC_FORMAT = new Intl.DateTimeFormat('en-US', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+  timeZone: 'UTC',
+});
 export function date(value: Date): string {
-  return (
-    new Intl.DateTimeFormat('en-US', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-      timeZone: 'UTC',
-    }).format(value) + ' UTC'
-  );
+  return UTC_FORMAT.format(value) + ' UTC';
 }
 export function hidden(name: string, value: string): string {
   return `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`;
 }
-export function page(title: string, body: string, development = false): string {
+export function page(title: string, body: string, showInbox: boolean): string {
   return `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)} · pgstencil</title><link rel="stylesheet" href="/style.css"></head>
 <body>
 <!-- THESIS: One sign-in task with clear recovery. OWN-WORLD: Warm paper and forest native forms. STORY: Email, verify, account, logout. FIRST VIEWPORT: Heading, instruction, labeled control, submit, recovery. FORM: Native HTML, no client JavaScript; seed 93f1c640. FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md. -->
-<header><a class="wordmark" href="/login" aria-label="pgstencil home">pgstencil<span aria-hidden="true">.</span></a>${development ? '<a class="dev-link" href="/dev/emails">Local inbox</a>' : ''}</header>
+<header><a class="wordmark" href="/login" aria-label="pgstencil home">pgstencil<span aria-hidden="true">.</span></a>${showInbox ? '<a class="dev-link" href="/dev/emails">Local inbox</a>' : ''}</header>
 <main id="main"><h1>${escape(title)}</h1>${body}</main>
 <footer>pgstencil <span>Simple sign-in. Your email is your key.</span></footer>
 </body></html>`;
@@ -41,29 +42,29 @@ export function errorMessage(message?: string): string {
 }
 export function loginPage(
   csrf: string,
+  showInbox: boolean,
   message?: string,
-  development = false,
 ): string {
   return page(
     'Welcome in.',
     `<p class="intro">Sign in with your email. We’ll send you a code and a link—use whichever you prefer.</p>${errorMessage(message)}
 <form method="post" action="/login">${hidden('csrf', csrf)}<label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required><button type="submit">Send sign-in code</button></form>
 <p class="note">New here? Your account is created when you verify your email.</p>`,
-    development,
+    showInbox,
   );
 }
 export function codePage(
   email: string,
   csrf: string,
+  showInbox: boolean,
   message?: string,
-  development = false,
 ): string {
   return page(
     'Check your email.',
     `<p class="intro">Enter the code we sent to <strong>${escape(email)}</strong>, or open the sign-in link in that email.</p>${errorMessage(message)}
 <form method="post" action="/login/code">${hidden('csrf', csrf)}<label for="code">Sign-in code</label><input id="code" class="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9\\s]{8,16}" maxlength="16" placeholder="0000 0000" aria-describedby="expiry" required><p id="expiry" class="field-note">Your code expires in 10 minutes.</p><button type="submit">Verify code</button></form>
 <div class="recovery"><form method="post" action="/login/resend">${hidden('csrf', csrf)}<button class="text-button" type="submit">Send a new code</button></form><a href="/login">Use another email</a></div><p class="note">You can request another code after one minute. Only the newest code will work.</p>`,
-    development,
+    showInbox,
   );
 }
 export function confirmPage(
@@ -71,24 +72,35 @@ export function confirmPage(
   csrf: string,
   id: string,
   linkToken: string,
-  development = false,
+  showInbox: boolean,
 ): string {
   return page(
     'Ready to sign in?',
     `<p class="intro">Continue as <strong>${escape(email)}</strong>.</p><form method="post" action="/login/link">${hidden('csrf', csrf)}${hidden('id', id)}${hidden('token', linkToken)}<button type="submit">Confirm sign-in</button></form><p class="note">This link works once, in the browser where you requested it.</p><a href="/login">Use another email</a>`,
-    development,
+    showInbox,
   );
 }
 export function sendFailurePage(
   email: string,
   csrf: string,
+  showInbox: boolean,
   message: string,
-  development = false,
 ): string {
   return page(
     'No new email sent.',
     `<p class="intro">We couldn’t send a new sign-in email to <strong>${escape(email)}</strong>.</p>${errorMessage(message)}<form method="post" action="/login">${hidden('csrf', csrf)}${hidden('email', email)}<button type="submit">Try sending again</button></form><div class="recovery"><a href="/login/code">Enter an existing code</a><a href="/login">Use another email</a></div>`,
-    development,
+    showInbox,
+  );
+}
+export function accountPage(
+  account: { email: string; created_at: Date; expires_at: Date },
+  csrf: string,
+  showInbox: boolean,
+): string {
+  return page(
+    'You’re signed in.',
+    `<p class="intro">Welcome, <strong>${escape(account.email)}</strong>.</p><dl><dt>Signed in</dt><dd>${escape(date(account.created_at))}</dd><dt>Session expires</dt><dd>${escape(date(account.expires_at))}</dd></dl><form method="post" action="/logout">${hidden('csrf', csrf)}<button type="submit">Sign out</button></form>`,
+    showInbox,
   );
 }
 export function loginEmail(

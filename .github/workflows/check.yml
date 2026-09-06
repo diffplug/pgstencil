@@ -1,7 +1,13 @@
 name: Check
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 permissions:
   contents: read
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -17,8 +23,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
-      - run: pnpm db:types --verify
-      - run: pnpm db:schema --verify
+      - run: pnpm db:verify
       - run: pnpm typecheck
       - run: pnpm test
       - name: Remove this job's containers and volumes

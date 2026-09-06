@@ -7,9 +7,8 @@ export class SystemTime implements Time {
   }
 }
 export class DevTime implements Time {
-  private instant: number;
+  private instant = 0;
   constructor(initial: string | Date = '2020-01-01T00:00:00.000Z') {
-    this.instant = 0;
     this.set(initial);
   }
   now(): Date {

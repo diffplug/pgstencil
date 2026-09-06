@@ -4,9 +4,13 @@ import { writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { generateTypes } from './generate-types.ts';
 import {
+  activeDatabases,
   allocateDatabase,
+  appliedMigrations,
+  clearTemplates,
   ensureServices,
   developmentDatabase,
+  developmentDatabaseName,
   queryDatabase,
   migrate,
   readMigrations,
@@ -15,9 +19,30 @@ import {
   projectRoot,
   projectName,
   stateDirectory,
+  type Services,
 } from '../packages/pgstencil/src/database.ts';
 const exec = promisify(execFile);
 const command = process.argv[2];
+const statePath = join(stateDirectory, 'services.json');
+const typesFile = 'examples/login/src/db.generated.ts';
+const schemaFile = join(projectRoot, 'examples/login/schema.sql');
+/**
+ * `unreachableIsIdle` is only for `stop`, which reads a recorded stack that may
+ * already be down. gc/reset run against a stack we just started, so there a
+ * failed query is a real fault and must surface.
+ */
+async function requireIdle(
+  services: Services,
+  unreachableIsIdle = false,
+): Promise<void> {
+  const active = unreachableIsIdle
+    ? await activeDatabases(services).catch(() => [])
+    : await activeDatabases(services);
+  if (active.length)
+    throw new Error(
+      'Applications/databases are still in use; stop them before cleanup',
+    );
+}
 if (command === 'create') {
   const label = process.argv[3];
   if (!label || !/^[a-z][a-z0-9_]*$/.test(label))
@@ -31,18 +56,18 @@ if (command === 'create') {
     flag: 'wx',
   });
   console.log(path);
-} else if (command === 'types' || command === 'schema') {
+} else if (
+  command === 'types' ||
+  command === 'schema' ||
+  command === 'verify'
+) {
+  // One lease covers both generators; `verify` checks each is up to date.
+  const verify = command === 'verify' || process.argv.includes('--verify');
   const lease = await allocateDatabase();
   try {
-    if (command === 'types') {
-      console.log(
-        await generateTypes(
-          lease.url,
-          'examples/login/src/db.generated.ts',
-          process.argv.includes('--verify'),
-        ),
-      );
-    } else {
+    if (command !== 'schema')
+      console.log(await generateTypes(lease.url, typesFile, verify));
+    if (command !== 'types') {
       const services = await ensureServices();
       const result = await exec(
         'docker',
@@ -62,48 +87,34 @@ if (command === 'create') {
         { maxBuffer: 4_000_000 },
       );
       const schema = result.stdout.replace(/^-- Dumped .*\n/gm, '');
-      const path = join(projectRoot, 'examples/login/schema.sql');
-      if (process.argv.includes('--verify')) {
-        if ((await readFile(path, 'utf8')) !== schema)
+      if (verify) {
+        if ((await readFile(schemaFile, 'utf8')) !== schema)
           throw new Error('Schema dump is stale; run pnpm db:schema');
-      } else await writeFile(path, schema);
+      } else await writeFile(schemaFile, schema);
     }
   } finally {
     await lease.close();
   }
-} else if (command === 'stop' || command === 'gc' || command === 'reset') {
+} else if (command === 'stop') {
+  // Read the recorded stack rather than starting one just to shut it down.
+  const state: Services | undefined = await readFile(statePath, 'utf8')
+    .then((text) => JSON.parse(text) as Services)
+    .catch(() => undefined);
+  if (state) await requireIdle(state, true);
+  await exec('docker', ['compose', '-p', projectName, 'down'], {
+    cwd: projectRoot,
+  });
+  await rm(statePath, { force: true });
+} else if (command === 'gc' || command === 'reset') {
   const services = await ensureServices();
-  const active = await queryDatabase(
-    services.postgresUrl,
-    "SELECT datname FROM pg_stat_activity WHERE datname <> 'postgres' AND backend_type='client backend' AND (datname LIKE 'integresql_%' OR datname='pgstencil_dev')",
-  );
-  if (active.length)
-    throw new Error(
-      'Applications/databases are still in use; stop them before cleanup',
-    );
-  if (command === 'stop') {
-    await exec('docker', ['compose', '-p', projectName, 'down'], {
-      cwd: projectRoot,
-    });
-    await rm(join(stateDirectory, 'services.json'), { force: true });
-  } else if (command === 'reset') {
+  await requireIdle(services);
+  if (command === 'reset') {
     await queryDatabase(
       services.postgresUrl,
-      'DROP DATABASE IF EXISTS pgstencil_dev',
+      `DROP DATABASE IF EXISTS ${developmentDatabaseName}`,
     );
     await developmentDatabase();
-  } else {
-    const result = await fetch(
-      `${services.integresqlUrl}/api/v1/admin/templates`,
-      { method: 'DELETE' },
-    );
-    if (!result.ok)
-      throw new Error(`IntegreSQL cleanup failed: ${result.status}`);
-    await queryDatabase(
-      services.postgresUrl,
-      'TRUNCATE pgstencil_ready_templates',
-    );
-  }
+  } else await clearTemplates(services);
 } else if (
   command === 'status' ||
   command === 'migrate' ||
@@ -116,22 +127,11 @@ if (command === 'create') {
     await validateMigrations(url, files);
     console.log('Applied SQL migration contents match.');
   } else {
-    const [history] = await queryDatabase(
-      url,
-      "SELECT to_regclass('public.pgmigrations') AS name",
-    );
-    const applied = history?.name
-      ? await queryDatabase<{ name: string }>(
-          url,
-          'SELECT name FROM pgmigrations ORDER BY id',
-        )
-      : [];
+    const applied = new Set(await appliedMigrations(url));
     console.table(
       files.map((file) => ({
         name: file.name,
-        status: applied.some((row) => `${row.name}.sql` === file.name)
-          ? 'applied'
-          : 'pending',
+        status: applied.has(file.name) ? 'applied' : 'pending',
       })),
     );
   }

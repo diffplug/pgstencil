@@ -22,6 +22,7 @@
     "db:migration:create": "tsx scripts/db.ts create",
     "db:schema": "tsx scripts/db.ts schema",
     "db:types": "tsx scripts/db.ts types",
+    "db:verify": "tsx scripts/db.ts verify",
     "db:reset": "tsx scripts/db.ts reset",
     "db:stop": "tsx scripts/db.ts stop",
     "db:gc": "tsx scripts/db.ts gc"

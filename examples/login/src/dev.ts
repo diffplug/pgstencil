@@ -15,6 +15,7 @@ const app = await startApp({
   time,
   random,
   email,
+  devInbox: email,
   secret: 'pgstencil-local-development-secret-only',
   development: true,
   port: Number(process.env.PORT ?? 0),

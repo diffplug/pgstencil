@@ -19,10 +19,7 @@ export function equalDigest(a: string, b: string): boolean {
 export function cookieValues(
   header: string | undefined,
 ): Record<string, string> {
-  const values: Record<string, string> = Object.create(null) as Record<
-    string,
-    string
-  >;
+  const values = Object.create(null) as Record<string, string>;
   for (const part of (header ?? '').split(';')) {
     const position = part.indexOf('=');
     if (position > 0)

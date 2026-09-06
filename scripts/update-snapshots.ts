@@ -2,19 +2,22 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { join } from 'node:path';
 import { withProcessLock } from '../packages/pgstencil/src/lock.ts';
-const root = join(import.meta.dirname, '..');
+import {
+  projectRoot,
+  stateDirectory,
+} from '../packages/pgstencil/src/paths.ts';
 await withProcessLock(
-  join(root, '.pgstencil', 'snapshot-update.lock'),
+  join(stateDirectory, 'snapshot-update.lock'),
   async () => {
     const child = spawn(
       process.execPath,
       [
-        join(root, 'node_modules/vitest/vitest.mjs'),
+        join(projectRoot, 'node_modules/vitest/vitest.mjs'),
         'run',
         ...process.argv.slice(2),
       ],
       {
-        cwd: root,
+        cwd: projectRoot,
         stdio: 'inherit',
         env: { ...process.env, PGSTENCIL_UPDATE: '1' },
       },

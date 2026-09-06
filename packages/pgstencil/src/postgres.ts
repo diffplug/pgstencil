@@ -7,14 +7,25 @@ export function connectDatabase<DB>(url: string): Kysely<DB> {
     }),
   });
 }
-export async function queryDatabase<
-  Row extends pg.QueryResultRow = pg.QueryResultRow,
->(url: string, text: string, values: unknown[] = []): Promise<Row[]> {
-  const client = new pg.Client({ connectionString: url });
-  await client.connect();
+/** Runs one action on a fresh connection and always closes it. */
+export async function withClient<T>(
+  url: string,
+  action: (client: pg.Client) => Promise<T>,
+  options: Omit<pg.ClientConfig, 'connectionString'> = {},
+): Promise<T> {
+  const client = new pg.Client({ ...options, connectionString: url });
   try {
-    return (await client.query<Row>(text, values)).rows;
+    await client.connect();
+    return await action(client);
   } finally {
     await client.end();
   }
+}
+export async function queryDatabase<
+  Row extends pg.QueryResultRow = pg.QueryResultRow,
+>(url: string, text: string, values: unknown[] = []): Promise<Row[]> {
+  return withClient(
+    url,
+    async (client) => (await client.query<Row>(text, values)).rows,
+  );
 }

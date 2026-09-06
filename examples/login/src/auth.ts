@@ -17,16 +17,19 @@ export interface AuthDependencies {
   random: RandomSource;
   email: EmailSender;
   secret: string;
-  origin: () => string;
+  origin: string;
 }
 export interface Pending {
   flow: Selectable<LoginFlows>;
   csrf: string;
   cookie: string;
 }
-export type AuthResult =
-  | { ok: true; session: string }
-  | { ok: false; status: number; message: string };
+export interface AuthFailure {
+  ok: false;
+  status: number;
+  message: string;
+}
+export type AuthResult = { ok: true; session: string } | AuthFailure;
 export class Auth {
   constructor(readonly deps: AuthDependencies) {
     if (deps.secret.length < 32)
@@ -120,9 +123,13 @@ export class Auth {
     pending: Pending,
     email: string,
     source: string,
-  ): Promise<{ ok: boolean; status: number; message: string }> {
+  ): Promise<{ ok: true } | AuthFailure> {
     const { db, time, random } = this.deps;
     const now = time.now();
+    // One value for both the stored challenge and the email that announces it.
+    const expiresAt = new Date(
+      Math.min(now.getTime() + CHALLENGE_MS, pending.flow.expires_at.getTime()),
+    );
     const prepared = await db.transaction().execute(async (trx) => {
       await trx
         .selectFrom('login_flows')
@@ -169,12 +176,7 @@ export class Auth {
           code_digest: keyed(this.deps.secret, 'login-code', `${id}:${code}`),
           link_hash: digest(link),
           created_at: now,
-          expires_at: new Date(
-            Math.min(
-              now.getTime() + CHALLENGE_MS,
-              pending.flow.expires_at.getTime(),
-            ),
-          ),
+          expires_at: expiresAt,
           consumed_at: null,
           invalidated_at: null,
           delivered_at: null,
@@ -188,27 +190,17 @@ export class Auth {
         status: 429,
         message: 'Please wait before requesting another code.',
       };
-    const link = `${this.deps.origin()}/login/link?id=${prepared.id}&token=${prepared.link}`;
+    const link = `${this.deps.origin}/login/link?id=${prepared.id}&token=${prepared.link}`;
     try {
       await this.deps.email.send(
-        loginEmail(
-          email,
-          prepared.code,
-          link,
-          new Date(
-            Math.min(
-              now.getTime() + CHALLENGE_MS,
-              pending.flow.expires_at.getTime(),
-            ),
-          ),
-        ),
+        loginEmail(email, prepared.code, link, expiresAt),
       );
       await db
         .updateTable('login_challenges')
         .set({ delivered_at: time.now() })
         .where('id', '=', prepared.id)
         .execute();
-      return { ok: true, status: 303, message: 'Check your email' };
+      return { ok: true };
     } catch {
       await db
         .updateTable('login_challenges')
@@ -274,16 +266,13 @@ export class Auth {
           status: 429,
           message: 'Too many attempts. Please try again later.',
         };
+      const code = value.replace(/\s/g, '');
       const matched =
         method === 'code'
-          ? /^\d{8}$/.test(value.replace(/\s/g, '')) &&
+          ? /^\d{8}$/.test(code) &&
             equalDigest(
               challenge.code_digest,
-              keyed(
-                this.deps.secret,
-                'login-code',
-                `${challenge.id}:${value.replace(/\s/g, '')}`,
-              ),
+              keyed(this.deps.secret, 'login-code', `${challenge.id}:${code}`),
             )
           : challenge.id === challengeId &&
             equalDigest(challenge.link_hash, digest(value));
@@ -301,19 +290,19 @@ export class Auth {
         .set({ consumed_at: now })
         .where('id', '=', challenge.id)
         .execute();
-      await trx
+      // DO UPDATE (unlike DO NOTHING) returns the existing row, so the id
+      // comes back without a second round trip.
+      const user = await trx
         .insertInto('users')
         .values({
           id: token(random, 16),
           email: challenge.email,
           created_at: now,
         })
-        .onConflict((c) => c.column('email').doNothing())
-        .execute();
-      const user = await trx
-        .selectFrom('users')
-        .select('id')
-        .where('email', '=', challenge.email)
+        .onConflict((c) =>
+          c.column('email').doUpdateSet({ email: sql`excluded.email` }),
+        )
+        .returning('id')
         .executeTakeFirstOrThrow();
       if (priorSession)
         await trx

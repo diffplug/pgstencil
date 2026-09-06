@@ -7,6 +7,8 @@ export async function withProcessLock<T>(
 ): Promise<T> {
   await mkdir(dirname(path), { recursive: true });
   const deadline = Date.now() + 180_000;
+  // Back off from a short first retry: the common wait is a warm-path check.
+  let wait = 5;
   while (true) {
     try {
       const file = await open(path, 'wx', 0o600);
@@ -28,7 +30,8 @@ export async function withProcessLock<T>(
       }
       if (Date.now() > deadline)
         throw new Error(`Timed out waiting for ${path}`);
-      await delay(100);
+      await delay(wait);
+      wait = Math.min(wait * 2, 100);
     }
   }
   try {

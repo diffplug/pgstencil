@@ -19,9 +19,9 @@ export interface EmailSender {
 export class EmailDev implements EmailSender {
   private messages: CapturedEmail[] = [];
   private cursor = 0;
-  private listeners = new Set<() => void>();
+  /** At most one waiter at a time, so the waiter itself is the "is waiting" flag. */
+  private listener: (() => void) | undefined;
   private closed = false;
-  private waiting = false;
   constructor(private readonly time: Time) {}
   async send(message: EmailMessage): Promise<void> {
     if (this.closed) throw new Error('EmailDev is closed');
@@ -31,7 +31,7 @@ export class EmailDev implements EmailSender {
         capturedAt: this.time.now().toISOString(),
       }),
     );
-    for (const listener of this.listeners) listener();
+    this.listener?.();
   }
   all(): CapturedEmail[] {
     return structuredClone(this.messages);
@@ -40,21 +40,20 @@ export class EmailDev implements EmailSender {
     return this.messages.length - this.cursor;
   }
   assertNoUnread(): void {
-    if (this.unreadCount())
-      throw new Error(`Expected no unread email; found ${this.unreadCount()}`);
+    const unread = this.unreadCount();
+    if (unread) throw new Error(`Expected no unread email; found ${unread}`);
   }
   async waitFor(count = 1, timeoutMs = 5000): Promise<CapturedEmail[]> {
     if (!Number.isInteger(count) || count < 1)
       throw new Error('Count must be positive');
-    if (this.waiting)
+    if (this.listener)
       throw new Error('Only one email consumer may wait at a time');
     if (this.closed) throw new Error('EmailDev is closed');
-    this.waiting = true;
     try {
       await new Promise<void>((resolve, reject) => {
         const finish = (error?: Error) => {
           clearTimeout(timer);
-          this.listeners.delete(check);
+          this.listener = undefined;
           error ? reject(error) : resolve();
         };
         const check = () => {
@@ -70,14 +69,14 @@ export class EmailDev implements EmailSender {
             ),
           timeoutMs,
         );
-        this.listeners.add(check);
+        this.listener = check;
         check();
       });
       const result = this.messages.slice(this.cursor, this.cursor + count);
       this.cursor += count;
       return structuredClone(result);
     } finally {
-      this.waiting = false;
+      this.listener = undefined;
     }
   }
   async next(timeoutMs = 5000): Promise<CapturedEmail> {
@@ -85,6 +84,6 @@ export class EmailDev implements EmailSender {
   }
   close(): void {
     this.closed = true;
-    for (const listener of this.listeners) listener();
+    this.listener?.();
   }
 }

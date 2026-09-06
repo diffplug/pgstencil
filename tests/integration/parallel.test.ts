@@ -1,13 +1,13 @@
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { test, expect } from 'vitest';
-import { fixture, begin, post } from './helpers.ts';
+import { fixture, begin, post, type Fixture } from './helpers.ts';
 import { captureEmail } from '../../packages/pgstencil/src/snapshots.ts';
 
 test('twenty live applications isolate ports, databases, time, random state and email', async ({
   onTestFinished,
 }) => {
-  const apps: Awaited<ReturnType<typeof fixture>>[] = [];
+  const apps: Fixture[] = [];
   onTestFinished(async () => {
     await Promise.all(apps.map((app) => app.close()));
   });

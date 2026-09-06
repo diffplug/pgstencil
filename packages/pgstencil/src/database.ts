@@ -1,27 +1,34 @@
-import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { join } from 'node:path';
 import {
   DockerComposeEnvironment,
   Wait,
   type StartedDockerComposeEnvironment,
 } from 'testcontainers';
 import pg from 'pg';
-import { queryDatabase } from './postgres.ts';
-export { connectDatabase, queryDatabase } from './postgres.ts';
-import {
-  migrate,
-  migrationFingerprint,
-  readMigrations,
-  type MigrationFile,
-} from './migrations.ts';
+import { queryDatabase, withClient } from './postgres.ts';
+export { connectDatabase, queryDatabase, withClient } from './postgres.ts';
+import { migrate, migrationFingerprint, readMigrations } from './migrations.ts';
 import { withProcessLock } from './lock.ts';
+import {
+  composeFile,
+  projectName,
+  projectRoot,
+  stateDirectory,
+} from './paths.ts';
 export {
+  appliedMigrations,
   migrate,
   migrationFingerprint,
   readMigrations,
   validateMigrations,
 } from './migrations.ts';
+export {
+  composeFile,
+  projectName,
+  projectRoot,
+  stateDirectory,
+} from './paths.ts';
 export interface Services {
   project: string;
   postgresUrl: string;
@@ -35,14 +42,16 @@ export interface DatabaseConfig {
   password: string;
   database: string;
 }
-interface Allocation {
-  id: number;
+interface DatabaseHandle {
   database: { config: DatabaseConfig };
 }
-export const projectRoot = resolve(import.meta.dirname, '../../..');
+interface Allocation extends DatabaseHandle {
+  id: number;
+}
 export const defaultMigrations = join(projectRoot, 'examples/login/migrations');
-export const stateDirectory = join(projectRoot, '.pgstencil');
-export const projectName = `pgstencil-${createHash('sha256').update(projectRoot).digest('hex').slice(0, 12)}`;
+export const developmentDatabaseName = 'pgstencil_dev';
+/** IntegreSQL has no health endpoint; an unknown template answers 404 once it is up. */
+const READINESS_PATH = '/templates/pgstencil-readiness/tests';
 let servicesPromise: Promise<Services> | undefined;
 let environment: StartedDockerComposeEnvironment | undefined;
 export function ensureServices(): Promise<Services> {
@@ -52,21 +61,16 @@ export function ensureServices(): Promise<Services> {
       const statePath = join(stateDirectory, 'services.json');
       try {
         const state = JSON.parse(await readFile(statePath, 'utf8')) as Services;
-        const client = new pg.Client({
-          connectionString: state.postgresUrl,
-          connectionTimeoutMillis: 1000,
-        });
-        try {
-          await client.connect();
-          await client.query('SELECT 1');
-          const response = await fetch(
-            `${state.integresqlUrl}/api/v1/templates/pgstencil-readiness/tests`,
-            { signal: AbortSignal.timeout(1000) },
-          );
-          if (response.status === 404) return state;
-        } finally {
-          await client.end();
-        }
+        // Independent probes: check both services at once, not one after the other.
+        const [, response] = await Promise.all([
+          withClient(state.postgresUrl, (client) => client.query('SELECT 1'), {
+            connectionTimeoutMillis: 1000,
+          }),
+          fetch(`${state.integresqlUrl}/api/v1${READINESS_PATH}`, {
+            signal: AbortSignal.timeout(1000),
+          }),
+        ]);
+        if (response.status === 404) return state;
       } catch {
         /* Stale or absent state: reattach/start through Compose. */
       }
@@ -81,10 +85,7 @@ export function ensureServices(): Promise<Services> {
         .withWaitStrategy('postgres-1', Wait.forHealthCheck())
         .withWaitStrategy(
           'integresql-1',
-          Wait.forHttp(
-            '/api/v1/templates/pgstencil-readiness/tests',
-            5000,
-          ).forStatusCode(404),
+          Wait.forHttp(`/api/v1${READINESS_PATH}`, 5000).forStatusCode(404),
         )
         .up();
       const postgres = environment.getContainer('postgres-1');
@@ -105,7 +106,8 @@ export function ensureServices(): Promise<Services> {
   });
   return servicesPromise;
 }
-async function api(
+/** Issues one IntegreSQL API call; `path` is relative to /api/v1. */
+export async function api(
   services: Services,
   path: string,
   method = 'GET',
@@ -118,24 +120,26 @@ async function api(
     signal: AbortSignal.timeout(60_000),
   });
 }
-async function requireOk(response: Response): Promise<void> {
+export async function requireOk(response: Response): Promise<void> {
   if (!response.ok)
     throw new Error(`IntegreSQL ${response.status}: ${await response.text()}`);
 }
-function hostUrl(services: Services, config: DatabaseConfig): string {
+function hostUrl(services: Services, database: string): string {
   const url = new URL(services.postgresUrl);
-  url.pathname = `/${config.database}`;
+  url.pathname = `/${database}`;
   return url.toString();
 }
+let composeSource: Promise<string> | undefined;
 export async function prepareTemplate(
   directory = defaultMigrations,
-): Promise<{ services: Services; hash: string; files: MigrationFile[] }> {
-  const services = await ensureServices();
-  const files = await readMigrations(directory);
-  const hash = migrationFingerprint(
-    files,
-    await readFile(join(projectRoot, 'compose.yaml'), 'utf8'),
-  ).slice(0, 32);
+): Promise<{ services: Services; hash: string }> {
+  // Independent reads; vitest reruns the process when either input changes.
+  const [services, files, compose] = await Promise.all([
+    ensureServices(),
+    readMigrations(directory),
+    (composeSource ??= readFile(composeFile, 'utf8')),
+  ]);
+  const hash = migrationFingerprint(files, compose).slice(0, 32);
   // A PG session lock also releases on process death, allowing safe recovery of an unfinished initializer.
   const admin = new pg.Client({ connectionString: services.postgresUrl });
   await admin.connect();
@@ -161,7 +165,7 @@ export async function prepareTemplate(
       );
       if (ready.rowCount) {
         await requireOk(await api(services, `/templates/${hash}`, 'PUT'));
-        return { services, hash, files };
+        return { services, hash };
       }
       await requireOk(await api(services, `/templates/${hash}`, 'DELETE'));
       response = await api(services, '/templates', 'POST', { hash });
@@ -170,11 +174,12 @@ export async function prepareTemplate(
       hash,
     ]);
     await requireOk(response);
-    const template = (await response.json()) as {
-      database: { config: DatabaseConfig };
-    };
+    const template = (await response.json()) as DatabaseHandle;
     try {
-      await migrate(hostUrl(services, template.database.config), files);
+      await migrate(
+        hostUrl(services, template.database.config.database),
+        files,
+      );
       await admin.query(
         'INSERT INTO pgstencil_ready_templates VALUES ($1) ON CONFLICT DO NOTHING',
         [hash],
@@ -187,7 +192,7 @@ export async function prepareTemplate(
   } finally {
     await admin.end();
   }
-  return { services, hash, files };
+  return { services, hash };
 }
 export async function allocateDatabase(
   directory = defaultMigrations,
@@ -196,7 +201,7 @@ export async function allocateDatabase(
   const response = await api(services, `/templates/${hash}/tests`);
   await requireOk(response);
   const allocation = (await response.json()) as Allocation;
-  const url = hostUrl(services, allocation.database.config);
+  const url = hostUrl(services, allocation.database.config.database);
   const lifetime = new pg.Client({ connectionString: url });
   await lifetime.connect();
   let closed = false;
@@ -230,22 +235,35 @@ export async function developmentDatabase(
   applyMigrations = true,
 ): Promise<string> {
   const services = await ensureServices();
-  const name = 'pgstencil_dev';
   await withProcessLock(join(stateDirectory, 'dev-db.lock'), async () => {
-    const found = await queryDatabase(
-      services.postgresUrl,
-      'SELECT 1 FROM pg_database WHERE datname=$1',
-      [name],
-    );
-    if (!found.length)
-      await queryDatabase(
-        services.postgresUrl,
-        'CREATE DATABASE pgstencil_dev',
+    await withClient(services.postgresUrl, async (client) => {
+      const found = await client.query(
+        'SELECT 1 FROM pg_database WHERE datname=$1',
+        [developmentDatabaseName],
       );
+      if (!found.rows.length)
+        await client.query(`CREATE DATABASE ${developmentDatabaseName}`);
+    });
   });
-  const url = new URL(services.postgresUrl);
-  url.pathname = `/${name}`;
+  const url = hostUrl(services, developmentDatabaseName);
   if (applyMigrations)
-    await migrate(url.toString(), await readMigrations(defaultMigrations));
-  return url.toString();
+    await migrate(url, await readMigrations(defaultMigrations));
+  return url;
+}
+/** Databases pgstencil owns that currently have client connections. */
+export async function activeDatabases(services: Services): Promise<string[]> {
+  const rows = await queryDatabase<{ datname: string }>(
+    services.postgresUrl,
+    "SELECT datname FROM pg_stat_activity WHERE datname <> 'postgres' AND backend_type='client backend' AND (datname LIKE 'integresql_%' OR datname=$1)",
+    [developmentDatabaseName],
+  );
+  return rows.map((row) => row.datname);
+}
+/** Drops every IntegreSQL template together with pgstencil's record of them. */
+export async function clearTemplates(services: Services): Promise<void> {
+  await requireOk(await api(services, '/admin/templates', 'DELETE'));
+  await queryDatabase(
+    services.postgresUrl,
+    'TRUNCATE pgstencil_ready_templates',
+  );
 }

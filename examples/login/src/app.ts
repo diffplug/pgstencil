@@ -10,7 +10,7 @@ import {
   type Time,
   type RandomSource,
   type EmailSender,
-  EmailDev,
+  type EmailDev,
 } from 'pgstencil';
 import { Auth } from './auth.ts';
 import type { DB } from './db.generated.ts';
@@ -26,12 +26,10 @@ import {
   loginPage,
   codePage,
   confirmPage,
-  escape,
-  date,
-  hidden,
-  loginEmail,
+  accountPage,
   sendFailurePage,
 } from './views.ts';
+import { devInboxRoutes } from './dev-inbox.ts';
 export interface AppConfig {
   databaseUrl: string;
   time: Time;
@@ -42,9 +40,14 @@ export interface AppConfig {
   publicOrigin?: string;
   secureCookies?: boolean;
   port?: number;
+  /** Supplying the capture inbox mounts /dev/emails; production simply cannot. */
+  devInbox?: EmailDev;
 }
+const MAX_BODY_BYTES = 8192;
+// Every instance serves the same stylesheet: read it once per process.
+let stylesheet: Promise<string> | undefined;
 export async function startApp(config: AppConfig) {
-  const development = config.development === true;
+  const development = config.development ?? false;
   const secure = config.secureCookies ?? !development;
   if (
     config.publicOrigin &&
@@ -57,327 +60,14 @@ export async function startApp(config: AppConfig) {
     throw new Error(
       'Production requires HTTPS publicOrigin and Secure cookies',
     );
+  const css = await (stylesheet ??= readFile(
+    new URL('./style.css', import.meta.url),
+    'utf8',
+  ));
   const db = connectDatabase<DB>(config.databaseUrl);
-  let origin = config.publicOrigin ?? '';
-  const auth = new Auth({
-    db,
-    time: config.time,
-    random: config.random,
-    email: config.email,
-    secret: config.secret,
-    origin: () => origin,
-  });
-  const sessionName = secure ? '__Host-pgstencil' : 'pgstencil_dev';
-  const pendingName = secure ? '__Host-pgstencil-pending' : 'pgstencil_pending';
-  const css = await readFile(new URL('./style.css', import.meta.url), 'utf8');
-  const server = createServer((req, res) => {
-    void handle(req, res).catch(() => {
-      if (!res.headersSent) {
-        res.statusCode = 500;
-        res.setHeader('content-type', 'text/html; charset=utf-8');
-        res.end(
-          page(
-            'Something went wrong.',
-            '<p>Please try again.</p>',
-            development,
-          ),
-        );
-      } else res.end();
-    });
-  });
-  function setCookie(
-    res: ServerResponse,
-    name: string,
-    value: string,
-    seconds: number,
-  ) {
-    const existing = res.getHeader('set-cookie');
-    const cookies = Array.isArray(existing)
-      ? existing
-      : existing
-        ? [String(existing)]
-        : [];
-    res.setHeader('set-cookie', [
-      ...cookies,
-      sessionCookie(name, value, config.time.now(), seconds, secure),
-    ]);
-  }
-  function send(res: ServerResponse, status: number, html: string) {
-    res.statusCode = status;
-    res.setHeader('content-type', 'text/html; charset=utf-8');
-    res.end(html);
-  }
-  function redirect(res: ServerResponse, path: string) {
-    res.statusCode = 303;
-    res.setHeader('location', path);
-    res.end();
-  }
-  async function handle(req: IncomingMessage, res: ServerResponse) {
-    res.setHeader('cache-control', 'no-store');
-    // no-referrer also nulls Origin on native form POSTs. strict-origin
-    // preserves CSRF origin checks while never disclosing paths/link tokens.
-    res.setHeader('referrer-policy', 'strict-origin');
-    res.setHeader('x-content-type-options', 'nosniff');
-    res.setHeader(
-      'content-security-policy',
-      "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-    );
-    const url = new URL(req.url ?? '/', origin);
-    const cookies = cookieValues(req.headers.cookie);
-    const rawSession = cookies[sessionName];
-    if (req.method === 'GET' && url.pathname === '/style.css') {
-      res.setHeader('content-type', 'text/css; charset=utf-8');
-      res.end(css);
-      return;
-    }
-    if (req.method === 'GET' && url.pathname === '/') {
-      redirect(res, '/login');
-      return;
-    }
-    if (req.method === 'GET' && url.pathname === '/login') {
-      const pending = await auth.newFlow();
-      setCookie(res, pendingName, pending.cookie, 30 * 60);
-      send(res, 200, loginPage(pending.csrf, undefined, development));
-      return;
-    }
-    if (req.method === 'GET' && url.pathname === '/account') {
-      const session = await auth.session(rawSession);
-      if (!session) {
-        setCookie(res, sessionName, '', 0);
-        redirect(res, '/login');
-        return;
-      }
-      send(
-        res,
-        200,
-        page(
-          'You’re signed in.',
-          `<p class="intro">Welcome, <strong>${escape(session.email)}</strong>.</p><dl><dt>Signed in</dt><dd>${escape(date(session.created_at))}</dd><dt>Session expires</dt><dd>${escape(date(session.expires_at))}</dd></dl><form method="post" action="/logout">${hidden('csrf', auth.sessionCsrf(rawSession!))}<button type="submit">Sign out</button></form>`,
-          development,
-        ),
-      );
-      return;
-    }
-    if (
-      development &&
-      config.email instanceof EmailDev &&
-      req.method === 'GET' &&
-      url.pathname.startsWith('/dev/emails')
-    ) {
-      const messages = config.email.all();
-      if (url.pathname === '/dev/emails') {
-        send(
-          res,
-          200,
-          page(
-            'Local inbox.',
-            `<p class="intro">Email sent by this application appears here.</p><ul class="messages">${messages.map((m, i) => `<li><a href="/dev/emails/${i}">${escape(m.subject)}</a><br>${escape(m.to.join(', '))}<br><small>${escape(m.capturedAt)}</small></li>`).join('') || '<li>No messages yet. Request a sign-in code to get started.</li>'}</ul><h2>Templates</h2><a href="/dev/emails/template">Sign-in email</a>`,
-            true,
-          ),
-        );
-        return;
-      }
-      const key = url.pathname.split('/')[3];
-      const message =
-        key === 'template'
-          ? loginEmail(
-              'you@example.com',
-              '12345678',
-              `${origin}/login`,
-              new Date(config.time.now().getTime() + 600000),
-            )
-          : messages[Number(key)];
-      if (message) {
-        if (url.searchParams.get('view') === 'text') {
-          res.setHeader('content-type', 'text/plain; charset=utf-8');
-          res.end(message.text);
-        } else send(res, 200, message.html);
-        return;
-      }
-    }
-    const pending = await auth.pending(cookies[pendingName]);
-    if (req.method === 'GET' && url.pathname === '/login/code') {
-      if (!pending?.flow.email) {
-        redirect(res, '/login');
-        return;
-      }
-      send(
-        res,
-        200,
-        codePage(pending.flow.email, pending.csrf, undefined, development),
-      );
-      return;
-    }
-    if (req.method === 'GET' && url.pathname === '/login/link') {
-      const id = url.searchParams.get('id') ?? '';
-      const link = url.searchParams.get('token') ?? '';
-      const challenge = pending
-        ? await db
-            .selectFrom('login_challenges')
-            .select(['email', 'flow_id'])
-            .where('id', '=', id)
-            .executeTakeFirst()
-        : undefined;
-      if (!pending || challenge?.flow_id !== pending.flow.id) {
-        send(
-          res,
-          200,
-          page(
-            'Open your original browser.',
-            '<p class="intro">Enter the code from your email in the browser where you requested it, or start a new sign-in here.</p><a href="/login">Start a new sign-in</a>',
-            development,
-          ),
-        );
-        return;
-      }
-      send(
-        res,
-        200,
-        confirmPage(challenge.email, pending.csrf, id, link, development),
-      );
-      return;
-    }
-    if (req.method === 'POST') {
-      if (req.headers.origin !== origin) {
-        send(
-          res,
-          403,
-          page(
-            'Request not accepted.',
-            '<p>Please return to the sign-in page and try again.</p>',
-            development,
-          ),
-        );
-        return;
-      }
-      if (
-        !req.headers['content-type']?.startsWith(
-          'application/x-www-form-urlencoded',
-        )
-      ) {
-        send(
-          res,
-          415,
-          page(
-            'Form required.',
-            '<p>Please submit the form on this site.</p>',
-            development,
-          ),
-        );
-        return;
-      }
-      let body = '';
-      for await (const chunk of req) {
-        body += String(chunk);
-        if (Buffer.byteLength(body) > 8192) {
-          send(
-            res,
-            413,
-            page('Request too large.', '<p>Please try again.</p>', development),
-          );
-          return;
-        }
-      }
-      const form = new URLSearchParams(body);
-      const csrf = form.get('csrf') ?? '';
-      const source = req.socket.remoteAddress ?? 'unknown';
-      if (url.pathname === '/logout') {
-        const session = await auth.session(rawSession);
-        if (!session || !equalDigest(session.csrf_hash, digest(csrf))) {
-          send(
-            res,
-            403,
-            page(
-              'Request not accepted.',
-              '<p>Return to your account and try again.</p>',
-              development,
-            ),
-          );
-          return;
-        }
-        await auth.logout(rawSession!);
-        setCookie(res, sessionName, '', 0);
-        redirect(res, '/login');
-        return;
-      }
-      if (!pending || !auth.validCsrf(pending, csrf)) {
-        send(
-          res,
-          403,
-          page(
-            'Start a new sign-in.',
-            '<p>This sign-in request is no longer available.</p><a href="/login">Return to sign-in</a>',
-            development,
-          ),
-        );
-        return;
-      }
-      if (url.pathname === '/login' || url.pathname === '/login/resend') {
-        const email = normalizeEmail(
-          url.pathname === '/login/resend'
-            ? (pending.flow.email ?? '')
-            : (form.get('email') ?? ''),
-        );
-        if (!email) {
-          send(
-            res,
-            400,
-            loginPage(
-              pending.csrf,
-              'Enter a valid email address.',
-              development,
-            ),
-          );
-          return;
-        }
-        const result = await auth.send(pending, email, source);
-        if (result.ok) redirect(res, '/login/code');
-        else
-          send(
-            res,
-            result.status,
-            sendFailurePage(email, pending.csrf, result.message, development),
-          );
-        return;
-      }
-      if (url.pathname === '/login/code' || url.pathname === '/login/link') {
-        const method = url.pathname === '/login/code' ? 'code' : 'link';
-        const result = await auth.verify(
-          pending,
-          method,
-          form.get(method === 'code' ? 'code' : 'token') ?? '',
-          form.get('id') ?? undefined,
-          source,
-          rawSession,
-        );
-        if (result.ok) {
-          setCookie(res, sessionName, result.session, 24 * 60 * 60);
-          setCookie(res, pendingName, '', 0);
-          redirect(res, '/account');
-        } else
-          send(
-            res,
-            result.status,
-            codePage(
-              pending.flow.email ?? '',
-              pending.csrf,
-              result.message,
-              development,
-            ),
-          );
-        return;
-      }
-    }
-    send(
-      res,
-      404,
-      page(
-        'Page not found.',
-        '<a href="/login">Return to sign-in</a>',
-        development,
-      ),
-    );
-  }
+  const server = createServer();
+  // Bind before building anything that needs the origin, so no component has
+  // to observe a half-built app through a late-filled thunk.
   try {
     server.listen(config.port ?? 0, '127.0.0.1');
     await once(server, 'listening');
@@ -385,27 +75,295 @@ export async function startApp(config: AppConfig) {
     await db.destroy();
     throw error;
   }
-  const address = server.address();
-  if (!address || typeof address === 'string')
-    throw new Error('No server address');
-  const localOrigin = `http://127.0.0.1:${address.port}`;
-  origin = config.publicOrigin ?? localOrigin;
-  let closed = false;
-  return {
-    origin: localOrigin,
-    publicOrigin: origin,
-    db,
-    auth,
-    sessionName,
-    pendingName,
-    async close() {
-      if (closed) return;
-      closed = true;
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string')
+      throw new Error('No server address');
+    const localOrigin = `http://127.0.0.1:${address.port}`;
+    const origin = config.publicOrigin ?? localOrigin;
+    const auth = new Auth({
+      db,
+      time: config.time,
+      random: config.random,
+      email: config.email,
+      secret: config.secret,
+      origin,
+    });
+    const inbox = config.devInbox
+      ? devInboxRoutes(config.devInbox, config.time, origin)
+      : undefined;
+    const showInbox = inbox !== undefined;
+    const sessionName = secure ? '__Host-pgstencil' : 'pgstencil_dev';
+    const pendingName = secure
+      ? '__Host-pgstencil-pending'
+      : 'pgstencil_pending';
+    function setCookie(
+      res: ServerResponse,
+      name: string,
+      value: string,
+      seconds: number,
+    ) {
+      // setCookie is the only writer, so the header is always an array.
+      const existing = (res.getHeader('set-cookie') as string[]) ?? [];
+      res.setHeader('set-cookie', [
+        ...existing,
+        sessionCookie(name, value, config.time.now(), seconds, secure),
+      ]);
+    }
+    function send(res: ServerResponse, status: number, html: string) {
+      res.statusCode = status;
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(html);
+    }
+    function fail(
+      res: ServerResponse,
+      status: number,
+      title: string,
+      body: string,
+    ) {
+      send(res, status, page(title, body, showInbox));
+    }
+    function redirect(res: ServerResponse, path: string) {
+      res.statusCode = 303;
+      res.setHeader('location', path);
+      res.end();
+    }
+    async function handle(req: IncomingMessage, res: ServerResponse) {
+      res.setHeader('cache-control', 'no-store');
+      // no-referrer also nulls Origin on native form POSTs. strict-origin
+      // preserves CSRF origin checks while never disclosing paths/link tokens.
+      res.setHeader('referrer-policy', 'strict-origin');
+      res.setHeader('x-content-type-options', 'nosniff');
+      res.setHeader(
+        'content-security-policy',
+        "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       );
-      await db.destroy();
-    },
-  };
+      const url = new URL(req.url ?? '/', origin);
+      const cookies = cookieValues(req.headers.cookie);
+      const rawSession = cookies[sessionName];
+      // Only the routes below that need a flow pay for the lookup, and only once.
+      let pendingFlow: ReturnType<Auth['pending']> | undefined;
+      const getPending = () =>
+        (pendingFlow ??= auth.pending(cookies[pendingName]));
+      if (req.method === 'GET' && url.pathname === '/style.css') {
+        res.setHeader('content-type', 'text/css; charset=utf-8');
+        res.end(css);
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/') {
+        redirect(res, '/login');
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/login') {
+        const flow = await auth.newFlow();
+        setCookie(res, pendingName, flow.cookie, 30 * 60);
+        send(res, 200, loginPage(flow.csrf, showInbox));
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/account') {
+        const session = await auth.session(rawSession);
+        if (!session) {
+          setCookie(res, sessionName, '', 0);
+          redirect(res, '/login');
+          return;
+        }
+        send(
+          res,
+          200,
+          accountPage(session, auth.sessionCsrf(rawSession!), showInbox),
+        );
+        return;
+      }
+      if (inbox && req.method === 'GET' && inbox(res, url)) return;
+      if (req.method === 'GET' && url.pathname === '/login/code') {
+        const pending = await getPending();
+        if (!pending?.flow.email) {
+          redirect(res, '/login');
+          return;
+        }
+        send(res, 200, codePage(pending.flow.email, pending.csrf, showInbox));
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/login/link') {
+        const pending = await getPending();
+        const id = url.searchParams.get('id') ?? '';
+        const link = url.searchParams.get('token') ?? '';
+        const challenge = pending
+          ? await db
+              .selectFrom('login_challenges')
+              .select(['email', 'flow_id'])
+              .where('id', '=', id)
+              .executeTakeFirst()
+          : undefined;
+        if (!pending || challenge?.flow_id !== pending.flow.id) {
+          fail(
+            res,
+            200,
+            'Open your original browser.',
+            '<p class="intro">Enter the code from your email in the browser where you requested it, or start a new sign-in here.</p><a href="/login">Start a new sign-in</a>',
+          );
+          return;
+        }
+        send(
+          res,
+          200,
+          confirmPage(challenge.email, pending.csrf, id, link, showInbox),
+        );
+        return;
+      }
+      if (req.method === 'POST') {
+        if (req.headers.origin !== origin) {
+          fail(
+            res,
+            403,
+            'Request not accepted.',
+            '<p>Please return to the sign-in page and try again.</p>',
+          );
+          return;
+        }
+        if (
+          !req.headers['content-type']?.startsWith(
+            'application/x-www-form-urlencoded',
+          )
+        ) {
+          fail(
+            res,
+            415,
+            'Form required.',
+            '<p>Please submit the form on this site.</p>',
+          );
+          return;
+        }
+        let body = '';
+        let received = 0;
+        for await (const chunk of req) {
+          received += (chunk as Buffer).length;
+          if (received > MAX_BODY_BYTES) {
+            fail(res, 413, 'Request too large.', '<p>Please try again.</p>');
+            return;
+          }
+          body += String(chunk);
+        }
+        const form = new URLSearchParams(body);
+        const csrf = form.get('csrf') ?? '';
+        const source = req.socket.remoteAddress ?? 'unknown';
+        if (url.pathname === '/logout') {
+          const session = await auth.session(rawSession);
+          if (!session || !equalDigest(session.csrf_hash, digest(csrf))) {
+            fail(
+              res,
+              403,
+              'Request not accepted.',
+              '<p>Return to your account and try again.</p>',
+            );
+            return;
+          }
+          await auth.logout(rawSession!);
+          setCookie(res, sessionName, '', 0);
+          redirect(res, '/login');
+          return;
+        }
+        const pending = await getPending();
+        if (!pending || !auth.validCsrf(pending, csrf)) {
+          fail(
+            res,
+            403,
+            'Start a new sign-in.',
+            '<p>This sign-in request is no longer available.</p><a href="/login">Return to sign-in</a>',
+          );
+          return;
+        }
+        if (url.pathname === '/login' || url.pathname === '/login/resend') {
+          const email = normalizeEmail(
+            url.pathname === '/login/resend'
+              ? (pending.flow.email ?? '')
+              : (form.get('email') ?? ''),
+          );
+          if (!email) {
+            send(
+              res,
+              400,
+              loginPage(
+                pending.csrf,
+                showInbox,
+                'Enter a valid email address.',
+              ),
+            );
+            return;
+          }
+          const result = await auth.send(pending, email, source);
+          if (result.ok) redirect(res, '/login/code');
+          else
+            send(
+              res,
+              result.status,
+              sendFailurePage(email, pending.csrf, showInbox, result.message),
+            );
+          return;
+        }
+        if (url.pathname === '/login/code' || url.pathname === '/login/link') {
+          const method = url.pathname === '/login/code' ? 'code' : 'link';
+          const result = await auth.verify(
+            pending,
+            method,
+            form.get(method === 'code' ? 'code' : 'token') ?? '',
+            form.get('id') ?? undefined,
+            source,
+            rawSession,
+          );
+          if (result.ok) {
+            setCookie(res, sessionName, result.session, 24 * 60 * 60);
+            setCookie(res, pendingName, '', 0);
+            redirect(res, '/account');
+          } else
+            send(
+              res,
+              result.status,
+              codePage(
+                pending.flow.email ?? '',
+                pending.csrf,
+                showInbox,
+                result.message,
+              ),
+            );
+          return;
+        }
+      }
+      fail(
+        res,
+        404,
+        'Page not found.',
+        '<a href="/login">Return to sign-in</a>',
+      );
+    }
+    server.on('request', (req, res) => {
+      void handle(req, res).catch(() => {
+        if (!res.headersSent)
+          fail(res, 500, 'Something went wrong.', '<p>Please try again.</p>');
+        else res.end();
+      });
+    });
+    let closed = false;
+    return {
+      origin: localOrigin,
+      publicOrigin: origin,
+      db,
+      auth,
+      sessionName,
+      pendingName,
+      async close() {
+        if (closed) return;
+        closed = true;
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+        await db.destroy();
+      },
+    };
+  } catch (error) {
+    server.close();
+    await db.destroy();
+    throw error;
+  }
 }
 export type LoginApp = Awaited<ReturnType<typeof startApp>>;

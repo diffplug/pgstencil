@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
 import { runner } from 'node-pg-migrate';
+import { withClient } from './postgres.ts';
 export interface MigrationFile {
   name: string;
   content: string;
@@ -43,6 +44,20 @@ export function migrationFingerprint(
     )
     .digest('hex');
 }
+const APPLIED_SQL = 'SELECT name FROM pgmigrations ORDER BY id';
+/** node-pg-migrate records migration names without the .sql suffix. */
+const fileNameOf = (appliedName: string): string => `${appliedName}.sql`;
+/** SQL migration file names already applied to this database, in order. */
+export async function appliedMigrations(url: string): Promise<string[]> {
+  return withClient(url, async (client) => {
+    const history = await client.query(
+      "SELECT to_regclass('public.pgmigrations') AS name",
+    );
+    if (!history.rows[0].name) return [];
+    const applied = await client.query<{ name: string }>(APPLIED_SQL);
+    return applied.rows.map((row) => fileNameOf(row.name));
+  });
+}
 async function validateClient(
   client: pg.Client,
   files: MigrationFile[],
@@ -51,33 +66,26 @@ async function validateClient(
     "SELECT to_regclass('public.pgmigrations') AS history, to_regclass('public.pgstencil_migration_files') AS manifest",
   );
   if (!exists.rows[0].history) return;
-  const applied = await client.query<{ name: string }>(
-    'SELECT name FROM pgmigrations ORDER BY id',
+  const applied = (await client.query<{ name: string }>(APPLIED_SQL)).rows.map(
+    (row) => fileNameOf(row.name),
   );
-  if (!applied.rows.length) return;
+  if (!applied.length) return;
   if (!exists.rows[0].manifest)
     throw new Error('Applied migrations have no checksum manifest');
   const manifest = await client.query<{ name: string; hash: string }>(
     'SELECT name, hash FROM pgstencil_migration_files',
   );
-  for (const item of applied.rows) {
-    const file = files.find((f) => f.name.replace(/\.sql$/, '') === item.name);
-    const saved = manifest.rows.find((f) => f.name === file?.name);
-    if (!file || saved?.hash !== file.hash)
-      throw new Error(`Applied migration changed or missing: ${item.name}`);
-  }
+  const expected = new Map(files.map((file) => [file.name, file.hash]));
+  const saved = new Map(manifest.rows.map((row) => [row.name, row.hash]));
+  for (const name of applied)
+    if (!expected.has(name) || saved.get(name) !== expected.get(name))
+      throw new Error(`Applied migration changed or missing: ${name}`);
 }
 export async function validateMigrations(
   url: string,
   files: MigrationFile[],
 ): Promise<void> {
-  const client = new pg.Client({ connectionString: url });
-  await client.connect();
-  try {
-    await validateClient(client, files);
-  } finally {
-    await client.end();
-  }
+  await withClient(url, (client) => validateClient(client, files));
 }
 export async function migrate(
   url: string,
@@ -95,14 +103,14 @@ export async function migrate(
       'CREATE TABLE IF NOT EXISTS pgstencil_migration_files (name text PRIMARY KEY, hash text NOT NULL)',
     );
     // Persist expected bytes before executing: an interrupted runner cannot hide a later edit.
-    for (const file of files)
-      await client.query(
-        'INSERT INTO pgstencil_migration_files VALUES ($1,$2) ON CONFLICT (name) DO UPDATE SET hash=excluded.hash',
-        [file.name, file.hash],
-      );
+    await client.query(
+      'INSERT INTO pgstencil_migration_files SELECT * FROM unnest($1::text[],$2::text[]) ON CONFLICT (name) DO UPDATE SET hash=excluded.hash',
+      [files.map((f) => f.name), files.map((f) => f.hash)],
+    );
     temporary = await mkdtemp(join(tmpdir(), 'pgstencil-migrations-'));
-    for (const file of files)
-      await writeFile(join(temporary, file.name), file.content);
+    await Promise.all(
+      files.map((file) => writeFile(join(temporary!, file.name), file.content)),
+    );
     await runner({
       dbClient: client,
       dir: temporary,

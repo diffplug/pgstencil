@@ -19,16 +19,23 @@ export class DevRandom implements RandomSource {
   constructor(private readonly seed = 'pgstencil') {}
   bytes(length: number): Buffer {
     validLength(length);
-    while (this.pending.length < length) {
-      const counter = Buffer.alloc(8);
-      counter.writeBigUInt64BE(this.counter++);
-      const block = createHash('sha256')
-        .update('pgstencil-dev-random-v1\0')
-        .update(this.seed)
-        .update('\0')
-        .update(counter)
-        .digest();
-      this.pending = Buffer.concat([this.pending, block]);
+    if (this.pending.length < length) {
+      // Grow in one concat: appending per block would recopy the whole buffer.
+      const blocks = [this.pending];
+      let total = this.pending.length;
+      while (total < length) {
+        const counter = Buffer.alloc(8);
+        counter.writeBigUInt64BE(this.counter++);
+        const block = createHash('sha256')
+          .update('pgstencil-dev-random-v1\0')
+          .update(this.seed)
+          .update('\0')
+          .update(counter)
+          .digest();
+        blocks.push(block);
+        total += block.length;
+      }
+      this.pending = Buffer.concat(blocks, total);
     }
     const result = Buffer.from(this.pending.subarray(0, length));
     this.pending = this.pending.subarray(length);

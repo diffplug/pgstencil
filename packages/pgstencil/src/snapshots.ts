@@ -42,11 +42,9 @@ export function htmlToMarkdown(html: string): string {
     const button = $(element);
     button.replaceWith($('<p>').text(`[${button.text().trim()}]`));
   });
-  const selected = $('.selfie').length
-    ? $('.selfie').last().html()
-    : $('main').length
-      ? $('main').html()
-      : $('body').html();
+  // .html() is null for an empty selection, so each fallback is just ??.
+  const selected =
+    $('.selfie').last().html() ?? $('main').html() ?? $('body').html();
   const turndown = new TurndownService({
     headingStyle: 'atx',
     codeBlockStyle: 'fenced',
@@ -86,12 +84,19 @@ export function htmlToMarkdown(html: string): string {
   turndown.addRule('frames', {
     filter: 'iframe',
     replacement: (_content, node) => {
-      const frame = load(node.outerHTML)('iframe');
-      return `\n\n[${frame.attr('title') ?? 'Embedded content'}](${frame.attr('src') ?? ''})\n\n`;
+      return `\n\n[${node.getAttribute('title') ?? 'Embedded content'}](${node.getAttribute('src') ?? ''})\n\n`;
     },
   });
   return turndown.turndown(selected ?? '').trim() + '\n';
 }
+/** Headers whose values change per run and would defeat snapshot comparison. */
+const VOLATILE_HEADERS = new Set([
+  'date',
+  'connection',
+  'keep-alive',
+  'content-length',
+  'transfer-encoding',
+]);
 export interface SnapshotResponse {
   status: number;
   text: string;
@@ -103,16 +108,7 @@ export function captureResponse(
 ): { html: string; markdown: string; http: string } {
   const headers = Object.fromEntries(
     Object.entries(response.headers)
-      .filter(
-        ([key]) =>
-          ![
-            'date',
-            'connection',
-            'keep-alive',
-            'content-length',
-            'transfer-encoding',
-          ].includes(key.toLowerCase()),
-      )
+      .filter(([key]) => !VOLATILE_HEADERS.has(key.toLowerCase()))
       .sort(([a], [b]) => a.localeCompare(b)),
   );
   return {

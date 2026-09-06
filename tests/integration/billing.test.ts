@@ -64,6 +64,42 @@ const billingTest = test.extend<{ f: Awaited<ReturnType<typeof fixture>> }>({
 });
 
 billingTest(
+  'application fulfillment and the webhook ledger share one transaction',
+  async ({ f }) => {
+    const { session } = await f.start();
+    f.dev.completeCheckout(session.id);
+    const signed = f.dev.signed(f.dev.events[0]!);
+    await expect(
+      f.billing.webhook(signed.body, signed.signature, async (_event, trx) => {
+        await trx
+          .updateTable('accounts')
+          .set({ email: 'rolled-back@example.test' })
+          .where('owner_id', '=', 'alice')
+          .execute();
+        throw new Error('fulfillment failed');
+      }),
+    ).rejects.toThrow('fulfillment failed');
+    expect(
+      (
+        await f.billing.db
+          .selectFrom('accounts')
+          .selectAll()
+          .executeTakeFirstOrThrow()
+      ).email,
+    ).toBe('alice@example.test');
+    expect((await f.billing.status('alice')).access).toBe(false);
+    let calls = 0;
+    const apply = async () => {
+      calls++;
+    };
+    await f.billing.webhook(signed.body, signed.signature, apply);
+    await f.billing.webhook(signed.body, signed.signature, apply);
+    expect(calls).toBe(1);
+    expect((await f.billing.status('alice')).access).toBe(true);
+  },
+);
+
+billingTest(
   'yes-card trial: signup and an open checkout grant nothing; confirmed trial ends exactly on time',
   async ({ f }) => {
     await f.billing.account('alice', 'alice@example.test');

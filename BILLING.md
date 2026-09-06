@@ -38,6 +38,8 @@ Events are processed under database locks and a durable event ledger. Duplicate 
 
 Customer and Checkout creation save their idempotency keys before calling Stripe. Repeated requests use the same parameters. Ambiguous creations older than 23 hours fail closed: inspect the stored key/customer/operation metadata in Stripe, restore the confirmed customer/session mapping, then retry. Do not erase the key and create another chargeable operation blindly. Retain the event and operation records for audit; this initial implementation has no automated retention job.
 
+`webhook(body, signature, apply)` optionally joins application database fulfillment to the same event transaction. The callback receives the verified event and Kysely transaction; use explicit application schemas. A failed callback rolls back both billing and application writes, and remains retryable. Keep external side effects out of this callback or persist an outbox record instead. StripeDev also supports one-time payment completion for consumer purchase tests.
+
 ## Testing
 
 `pnpm test tests/integration/billing.test.ts tests/integration/billing-http.test.ts` uses real Postgres, the real Stripe SDK, and a local HTTP simulator. It covers required-card trial enrollment, exact expiry, paid renewal, failed payment/recovery, cancellation, no repeated trial, monthly/yearly price selection, concurrent creation, lost responses, expired Checkout, owner authorization, CSRF, signatures, duplicates, ordering and webhook retries. Snapshots cover database state, outgoing Stripe requests, response headers, HTML and Markdown; existing auth tests cover deterministic cookies and email.

@@ -512,7 +512,12 @@ export class Billing {
       throw new BillingError('Unexpected Stripe event configuration.', 400);
     return event;
   }
-  async webhook(body: Buffer | string, signature: string): Promise<void> {
+  async webhook(
+    body: Buffer | string,
+    signature: string,
+    /** Application database effects join the same commit and retry boundary. */
+    apply?: (event: Stripe.Event, trx: Transaction<BillingDB>) => Promise<void>,
+  ): Promise<void> {
     const event = this.verifyWebhook(body, signature);
     try {
       await this.db.transaction().execute(async (trx) => {
@@ -539,6 +544,7 @@ export class Billing {
             .executeTakeFirst();
           if (account) await this.synchronize(trx, account.owner_id);
         }
+        if (apply) await apply(event, trx);
         const now = this.time.now();
         const processed = {
           processed_at: now,

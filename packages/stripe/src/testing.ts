@@ -134,6 +134,21 @@ export async function createStripeDev(
     save();
     return sub;
   }
+  function completePayment(sessionId: string) {
+    const session = checkouts.get(sessionId);
+    if (
+      !session ||
+      session.mode !== 'payment' ||
+      session.status !== 'open' ||
+      session.expires_at <= seconds()
+    )
+      throw new Error('No open payment checkout');
+    session.status = 'complete';
+    session.payment_status = 'paid';
+    event('checkout.session.completed', session);
+    save();
+    return session;
+  }
   function transition(
     subscriptionId: string,
     action: 'renew' | 'payment-failed' | 'cancel' | 'cancel-at-period-end',
@@ -177,7 +192,8 @@ export async function createStripeDev(
             res.writeHead(403).end();
             return;
           }
-          completeCheckout(session.id);
+          if (session.mode === 'payment') completePayment(session.id);
+          else completeCheckout(session.id);
           if (webhookTarget) await deliver(webhookTarget);
           const success = new URL(
             parameters.get(session.id)!.get('success_url')!,
@@ -256,12 +272,32 @@ export async function createStripeDev(
           mode: body.get('mode'),
           customer: body.get('customer'),
           client_reference_id: body.get('client_reference_id'),
+          metadata: Object.fromEntries(
+            [...body]
+              .filter(([key]) => /^metadata\[[^\]]+\]$/.test(key))
+              .map(([key, value]) => [key.slice(9, -1), value]),
+          ),
           subscription: null,
           payment_status: 'unpaid',
           livemode: false,
           expires_at: Number(body.get('expires_at')),
           url: `${origin}/checkout/${sessionId}`,
         } as Stripe.Checkout.Session;
+        if (session.mode === 'payment') {
+          session.customer_email = body.get('customer_email');
+          session.line_items = {
+            object: 'list',
+            has_more: false,
+            url: '',
+            data: [
+              {
+                id: id('li'),
+                quantity: Number(body.get('line_items[0][quantity]')),
+                price: { id: body.get('line_items[0][price]') },
+              } as Stripe.LineItem,
+            ],
+          };
+        }
         checkouts.set(sessionId, session);
         parameters.set(sessionId, body);
         result = session;
@@ -381,6 +417,7 @@ export async function createStripeDev(
     requests,
     events,
     completeCheckout,
+    completePayment,
     transition,
     signed,
     deliver,

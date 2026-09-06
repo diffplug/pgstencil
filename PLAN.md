@@ -1,6 +1,10 @@
 # pgstencil implementation plan
 
-Status: proposed architecture and implementation sequence. No implementation yet.
+Status: the first working recipe and login example are implemented. See README.md for available commands and exact behavior. The architecture below records the intended direction; extension items called out here are not all shipped.
+
+Delivered: SQL migrations and checksum validation; reusable Docker/IntegreSQL templates and isolated leases; Kysely types/schema dump; real-port application fixtures; per-app time, randomness and email; readable file snapshots with explicit updates; the email login example; concurrency/upgrade/failure tests; and Linux CI configuration.
+
+Remaining expansion work: automatic codegen during watch, opt-in query traces, attachment captures, a generalized snapshot identity/duplicate-path API, explicit nontransactional migrations, template seed hooks, and standalone published-package configuration/second consumer. The current package is a private workspace toolkit whose service configuration comes from this checkout. Linux CI is configured; the initial local validation ran on macOS.
 
 Build a TypeScript/pnpm toolkit for Postgres-backed applications: version the schema, automatically prepare a reusable local database template, start isolated test applications concurrently, control server time and randomness deterministically, capture outgoing email in memory, and review their behavior through readable snapshots.
 
@@ -20,22 +24,22 @@ Preserve that developer experience. Use dedicated, immutable application templat
 
 Dependency policy: adopt libraries that replace substantial machinery or difficult protocol semantics. Write small pgstencil-specific helpers locally using Node built-ins and the libraries already selected. Do not add dependencies merely for hashing, IDs, port selection, formatting a table, maintaining an outbox, composing lenses, or parsing a handful of CLI flags. Assess direct dependencies case by case; this is not a promise to eliminate transitive utilities used by the major libraries.
 
-| Concern | Initial choice | What pgstencil adds |
-| --- | --- | --- |
-| Runtime/tooling | Node LTS, strict TypeScript, ESM, pnpm workspace | Pinned compatible versions, repeatable scripts |
-| Postgres access | [`pg`](https://node-postgres.com/features/queries) | Administrative connections and application pool lifecycle |
-| Migrations | [`node-pg-migrate`](https://salsita.github.io/node-pg-migrate/api), SQL migration files | Configuration, template preparation, validation commands |
-| Database templates/clones | [IntegreSQL](https://github.com/allaboutapps/integresql) | Migration/seed initialization, application database lifetime and configuration |
-| Docker | [Testcontainers](https://node.testcontainers.org/features/containers/) and its Postgres module | Automatically start/reuse Postgres and IntegreSQL on a shared network |
-| Tests/snapshot storage | [Vitest file snapshots](https://vitest.dev/guide/snapshot.html#file-snapshots) | Local capture functions, lenses, stable names and readable facets |
-| HTML selection | [Cheerio](https://cheerio.js.org/docs/intro/) | Explicit content selection and exclusions |
-| HTML to Markdown | [Turndown](https://github.com/mixmark-io/turndown) | Rules for application content that generic conversion loses |
-| HTTP test client | [Supertest](https://github.com/forwardemail/supertest) | Per-client fixtures, response capture, and clock integration; preserve its fluent request/assertion API |
-| Cookies | Supertest's session agent by default | Capture actual response cookies and exercise server-side validity using the injected time |
-| Server time | Small local `Time` / `DevTime` implementations | `now()`, `set(instant)`, and `advanceHours(n)` per application |
-| Randomness | Small injected byte-provider interface backed by Node crypto in production and a seeded implementation in tests | Repeatable tokens, IDs, and cookie values per application |
-| Email | Small local sender interface and in-memory `EmailDev` implementation | Per-application outbox, wait helper, snapshots and local previews; provider API adapter in production |
-| Application queries | [Kysely](https://kysely.dev/) + [`kysely-codegen`](https://github.com/RobinBlomberg/kysely-codegen), using `pg` | Generate types from the migrated schema before typechecking |
+| Concern                   | Initial choice                                                                                                  | What pgstencil adds                                                                                     |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Runtime/tooling           | Node LTS, strict TypeScript, ESM, pnpm workspace                                                                | Pinned compatible versions, repeatable scripts                                                          |
+| Postgres access           | [`pg`](https://node-postgres.com/features/queries)                                                              | Administrative connections and application pool lifecycle                                               |
+| Migrations                | [`node-pg-migrate`](https://salsita.github.io/node-pg-migrate/api), SQL migration files                         | Configuration, template preparation, validation commands                                                |
+| Database templates/clones | [IntegreSQL](https://github.com/allaboutapps/integresql)                                                        | Migration/seed initialization, application database lifetime and configuration                          |
+| Docker                    | [Testcontainers](https://node.testcontainers.org/features/containers/) Compose support                          | Automatically start/reuse Postgres and IntegreSQL on a shared network                                   |
+| Tests/snapshot storage    | [Vitest file snapshots](https://vitest.dev/guide/snapshot.html#file-snapshots)                                  | Local capture functions, lenses, stable names and readable facets                                       |
+| HTML selection            | [Cheerio](https://cheerio.js.org/docs/intro/)                                                                   | Explicit content selection and exclusions                                                               |
+| HTML to Markdown          | [Turndown](https://github.com/mixmark-io/turndown)                                                              | Rules for application content that generic conversion loses                                             |
+| HTTP test client          | [Supertest](https://github.com/forwardemail/supertest)                                                          | Per-client fixtures, response capture, and clock integration; preserve its fluent request/assertion API |
+| Cookies                   | Supertest's session agent by default                                                                            | Capture actual response cookies and exercise server-side validity using the injected time               |
+| Server time               | Small local `Time` / `DevTime` implementations                                                                  | `now()`, `set(instant)`, and `advanceHours(n)` per application                                          |
+| Randomness                | Small injected byte-provider interface backed by Node crypto in production and a seeded implementation in tests | Repeatable tokens, IDs, and cookie values per application                                               |
+| Email                     | Small local sender interface and in-memory `EmailDev` implementation                                            | Per-application outbox, wait helper, snapshots and local previews; provider API adapter in production   |
+| Application queries       | [Kysely](https://kysely.dev/) + [`kysely-codegen`](https://github.com/RobinBlomberg/kysely-codegen), using `pg` | Generate types from the migrated schema before typechecking                                             |
 
 Use Kysely for application queries from the first example and `pg` for the driver/administrative connections. Integrate code generation once a migrated clone is available; keep raw SQL available. SQL migrations remain the schema authority. Do not build an ORM, migration executor, HTML parser, or general snapshot runner.
 
@@ -145,15 +149,15 @@ Acceptance: request a login email containing both a code and a link; await its c
 
 Build a small local API that captures values into named text facets, applies pure transformations, and passes the resulting text to Vitest. No dependency on completing Selfie's JavaScript implementation. Keep capture and lens functions independent of Vitest so a future Selfie adapter is possible.
 
-| Capture | Facets and behavior |
-| --- | --- |
-| Query result | Readable rows with column names, explicit nulls, and stable representations for timestamps, decimals, bigint, JSON and binary values |
-| Query trace, opt-in | SQL and parameters captured separately, with ordering semantics declared; query timings excluded |
-| HTTP response | Status, relevant headers, redirect location, and every `Set-Cookie` header |
-| Cookies | Names, normalized values where requested, domain/path, expiry, HttpOnly, Secure and SameSite; optionally jar state after the response |
-| Email | Recipients/headers, subject, plaintext, HTML, derived Markdown, and relevant attachment metadata |
-| HTML | Original response body by default; readable formatting as an explicit lens with whitespace-sensitive cases covered |
-| Markdown | Selected HTML converted to readable content, preserving links, tables, images and meaningful form/iframe information through custom rules |
+| Capture             | Facets and behavior                                                                                                                       |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Query result        | Readable rows with column names, explicit nulls, and stable representations for timestamps, decimals, bigint, JSON and binary values      |
+| Query trace, opt-in | SQL and parameters captured separately, with ordering semantics declared; query timings excluded                                          |
+| HTTP response       | Status, relevant headers, redirect location, and every `Set-Cookie` header                                                                |
+| Cookies             | Names, normalized values where requested, domain/path, expiry, HttpOnly, Secure and SameSite; optionally jar state after the response     |
+| Email               | Recipients/headers, subject, plaintext, HTML, derived Markdown, and relevant attachment metadata                                          |
+| HTML                | Original response body by default; readable formatting as an explicit lens with whitespace-sensitive cases covered                        |
+| Markdown            | Selected HTML converted to readable content, preserving links, tables, images and meaningful form/iframe information through custom rules |
 
 Preserve query row order. Tests should use `ORDER BY` or explicitly request an unordered comparison. Normalize only declared unstable fields. Prefer an injected clock and deterministic IDs over broad replacement patterns. Map only the fixture's known origin to a stable test origin, preserving meaningful URL differences. Cookie normalization must preserve security attributes and expiry behavior.
 
@@ -181,21 +185,21 @@ Snapshot identity must derive from the test path, full test name, explicit case 
 
 ## Intended commands
 
-These are proposed interfaces to implement, not commands available yet.
+These commands are available; README.md documents their exact current behavior.
 
-| Command | Intended result |
-| --- | --- |
-| `pnpm test` | Prepare infrastructure automatically and run the suite |
-| `pnpm test:watch` | Reuse infrastructure and rerun affected tests |
-| `pnpm snapshot:update` | Explicitly update reviewed snapshot baselines |
-| `pnpm db:migration:create <name>` | Create the next SQL migration |
-| `pnpm db:status` / `pnpm db:validate` | Inspect migration history and validate applied contents |
-| `pnpm db:migrate` | Apply pending migrations to the explicitly configured persistent database |
-| `pnpm db:schema` | Regenerate the reviewable schema dump |
-| `pnpm db:types` | Regenerate Kysely query types |
-| `pnpm dev` | Start the example using its persistent development database |
-| `pnpm db:reset` | Explicitly recreate the development database |
-| `pnpm db:gc` / `pnpm db:stop` | Reclaim stale owned resources / stop an idle local container |
-| `pnpm check` | Run the repository's required verification |
+| Command                               | Intended result                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------- |
+| `pnpm test`                           | Prepare infrastructure automatically and run the suite                    |
+| `pnpm test:watch`                     | Reuse infrastructure and rerun affected tests                             |
+| `pnpm snapshot:update`                | Explicitly update reviewed snapshot baselines                             |
+| `pnpm db:migration:create <name>`     | Create the next SQL migration                                             |
+| `pnpm db:status` / `pnpm db:validate` | Inspect migration history and validate applied contents                   |
+| `pnpm db:migrate`                     | Apply pending migrations to the explicitly configured persistent database |
+| `pnpm db:schema`                      | Regenerate the reviewable schema dump                                     |
+| `pnpm db:types`                       | Regenerate Kysely query types                                             |
+| `pnpm dev`                            | Start the example using its persistent development database               |
+| `pnpm db:reset`                       | Explicitly recreate the development database                              |
+| `pnpm db:gc` / `pnpm db:stop`         | Reclaim stale owned resources / stop an idle local container              |
+| `pnpm check`                          | Run the repository's required verification                                |
 
 The first useful deliverable is one test that starts from Docker availability, prepares the schema through SQL migrations and IntegreSQL, serves a real request on an assigned port with controlled time/randomness, and produces all four original snapshot views plus captured email. The must-have milestone is complete when that workflow remains deterministic under parallel tests with independent time, random sources and outboxes, explicit time advancement, separate test processes, repeated warm runs, migration changes, and failure recovery.

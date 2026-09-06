@@ -6,10 +6,11 @@ import { allocateDatabase } from './database.ts';
 export async function createTestContext(
   options: { seed?: string; now?: string; migrations?: string } = {},
 ) {
-  const database = await allocateDatabase(options.migrations);
   const time = new DevTime(options.now);
   const random = new DevRandom(options.seed);
   const email = new EmailDev(time);
+  // Validate local options before acquiring a lease that would need disposal.
+  const database = await allocateDatabase(options.migrations);
   let closed = false;
   return {
     database,

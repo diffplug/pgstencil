@@ -1,6 +1,6 @@
 # First example: email code and link login
 
-Status: proposed example behavior and acceptance tests; not implemented yet. This example exercises pgstencil's database, HTTP, email, snapshot, time, and randomness infrastructure. Pages are server-rendered forms and work without client JavaScript.
+Status: implemented example behavior; the integration tests cover the core success, expiry, replay, concurrency, rate-limit, CSRF, cookie and delivery-failure scenarios. This example exercises pgstencil's database, HTTP, email, snapshot, time, and randomness infrastructure. Pages are server-rendered forms and work without client JavaScript.
 
 ## User flow
 
@@ -25,17 +25,17 @@ These choices apply the general emailed-secret guidance on expiry, one-time use,
 
 ## Requests and persistence
 
-| Request | Behavior |
-| --- | --- |
-| `GET /login` | Render the email form and establish an anonymous form/CSRF context |
-| `POST /login` | Validate form, check send limits, create a pending challenge and send/capture email; redirect to `/login/code` |
-| `GET /login/code` | Render code entry for the pending flow |
-| `POST /login/code` | Verify pending-browser binding, CSRF token, challenge, attempt budget and code; establish session on success |
-| `POST /login/resend` | Rate-limit, replace this pending flow's challenge, invalidate its previous code/link, and send a new email |
-| `GET /login/link?...` | Render confirmation only; never consume a token or create an authenticated session |
-| `POST /login/link` | Verify browser binding, CSRF token, and link token; establish session on success |
-| `GET /account` | Validate the session using server time and render account details, or redirect to login |
-| `POST /logout` | Check CSRF, revoke the current session and clear the cookie |
+| Request               | Behavior                                                                                                       |
+| --------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `GET /login`          | Render the email form and establish an anonymous form/CSRF context                                             |
+| `POST /login`         | Validate form, check send limits, create a pending challenge and send/capture email; redirect to `/login/code` |
+| `GET /login/code`     | Render code entry for the pending flow                                                                         |
+| `POST /login/code`    | Verify pending-browser binding, CSRF token, challenge, attempt budget and code; establish session on success   |
+| `POST /login/resend`  | Rate-limit, replace this pending flow's challenge, invalidate its previous code/link, and send a new email     |
+| `GET /login/link?...` | Render confirmation only; never consume a token or create an authenticated session                             |
+| `POST /login/link`    | Verify browser binding, CSRF token, and link token; establish session on success                               |
+| `GET /account`        | Validate the session using server time and render account details, or redirect to login                        |
+| `POST /logout`        | Check CSRF, revoke the current session and clear the cookie                                                    |
 
 Start with SQL migrations for `users`, `login_challenges`, `sessions`, and shared rate-limit state. Keep the pending-browser/CSRF context small and separate from authenticated sessions. Use Kysely for every application query. Apply the same documented email-normalization policy during lookup, uniqueness checks and rate limiting; do not invent provider-specific alias equivalence.
 
@@ -51,7 +51,7 @@ Initial send policy: a 60-second resend cooldown, at most five sends per email p
 
 Use a generic “That code is invalid or has expired” error with a way to request another. Email delivery failures leave no authenticated session; mark the undelivered challenge unusable and offer retry without revealing account existence. The first implementation directly awaits the injected sender; a durable mail queue is a separate requirement.
 
-Build email links from a configured public origin and redirect only to fixed local destinations in this example. Keep secrets out of logs, redact link query parameters in access logging, disable caching on auth responses, set `Referrer-Policy: no-referrer`, and keep token-bearing pages free of third-party content. Successful verification redirects to a clean URL.
+Build email links from a configured public origin and redirect only to fixed local destinations in this example. Keep secrets out of logs, redact link query parameters in access logging, disable caching on auth responses, set `Referrer-Policy: strict-origin` (native form POSTs need their Origin header, while paths and tokens must not appear in referrers), and keep token-bearing pages free of third-party content. Successful verification redirects to a clean URL.
 
 GET requests never authenticate or consume challenges. The confirmation POST protects against ordinary link-preview requests consuming the token: [Supabase documents email security scanners prefetching login links](https://supabase.com/docs/guides/auth/auth-email-templates#email-prefetching). Browser binding provides an additional check even if a scanner interacts with the form.
 
@@ -61,23 +61,23 @@ Production uses HTTPS with a host-only session cookie: `Secure`, `HttpOnly`, `Sa
 
 Use a fresh IntegreSQL database, an application-local DevTime, a freshly seeded random source, an in-memory EmailDev, and Supertest clients. Fix test digest/configuration keys. Ordinary session tests use `agent()`; historical-time tests explicitly replay the captured cookie to verify server validation independently of client eviction.
 
-| Scenario | Required evidence |
-| --- | --- |
-| New user enters code | User created only after verification; one session; email, challenge/user/session queries, cookie headers, page HTML and derived Markdown snapshots |
-| Returning user enters code | Existing user reused; new session token; same outward login flow |
-| Click link | Confirmation GET leaves challenge/session state unchanged; confirmation POST authenticates |
-| Other browser opens link | Helpful fallback instructions; no consumption or session creation |
-| Invalid code | Rejected, no session, failed-attempt count increases |
-| Challenge expiry | Valid immediately before 10 minutes; invalid exactly at 10 minutes, for both code and link on separate fresh fixtures |
-| Replay | After code success, neither code nor link can authenticate again; same after link success |
-| Concurrent redemption | Parallel code/link submissions for the same challenge yield exactly one successful authentication |
-| Resend | Previous code/link invalidated; new secret works; cooldown enforced; aggregate guessing budget persists |
-| Throttling | Send and verification limits hold across multiple apps deliberately sharing a test database; advancing DevTime opens the next window |
-| Session expiry | At Jan 1 2020, authenticate and capture the cookie; after 23 hours it works; after one more hour replay is rejected and the cookie is cleared |
-| Logout | POST revokes session; replay cannot authenticate; missing/invalid CSRF rejected |
-| Request forgery | Missing/wrong pending binding, invalid CSRF and untrusted origins cannot complete login |
-| Secret handling | Persisted challenge/session rows contain digests, not plaintext secrets; production cookie flags and cache/referrer headers verified |
-| Delivery failure | Failed sender produces no usable undelivered challenge or authenticated session; retry behavior clear |
-| Parallel isolation | Twenty independent apps can use identical seeds and dates with identical snapshots and no shared mail, random state, sessions or database writes |
+| Scenario                   | Required evidence                                                                                                                                  |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New user enters code       | User created only after verification; one session; email, challenge/user/session queries, cookie headers, page HTML and derived Markdown snapshots |
+| Returning user enters code | Existing user reused; new session token; same outward login flow                                                                                   |
+| Click link                 | Confirmation GET leaves challenge/session state unchanged; confirmation POST authenticates                                                         |
+| Other browser opens link   | Helpful fallback instructions; no consumption or session creation                                                                                  |
+| Invalid code               | Rejected, no session, failed-attempt count increases                                                                                               |
+| Challenge expiry           | Valid immediately before 10 minutes; invalid exactly at 10 minutes, for both code and link on separate fresh fixtures                              |
+| Replay                     | After code success, neither code nor link can authenticate again; same after link success                                                          |
+| Concurrent redemption      | Parallel code/link submissions for the same challenge yield exactly one successful authentication                                                  |
+| Resend                     | Previous code/link invalidated; new secret works; cooldown enforced; aggregate guessing budget persists                                            |
+| Throttling                 | Send and verification limits hold across multiple apps deliberately sharing a test database; advancing DevTime opens the next window               |
+| Session expiry             | At Jan 1 2020, authenticate and capture the cookie; after 23 hours it works; after one more hour replay is rejected and the cookie is cleared      |
+| Logout                     | POST revokes session; replay cannot authenticate; missing/invalid CSRF rejected                                                                    |
+| Request forgery            | Missing/wrong pending binding, invalid CSRF and untrusted origins cannot complete login                                                            |
+| Secret handling            | Persisted challenge/session rows contain digests, not plaintext secrets; production cookie flags and cache/referrer headers verified               |
+| Delivery failure           | Failed sender produces no usable undelivered challenge or authenticated session; retry behavior clear                                              |
+| Parallel isolation         | Twenty independent apps can use identical seeds and dates with identical snapshots and no shared mail, random state, sessions or database writes   |
 
 Use focused ordinary assertions for invariants and race outcomes; snapshots show readable state and responses. Keep email code/link contents visible in test artifacts because they come from deterministic test inputs. Snapshot security-relevant attributes rather than normalizing them away. Boundary tests compare against the injected time without sleeping or simulating timers.

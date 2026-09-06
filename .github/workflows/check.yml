@@ -1,0 +1,29 @@
+name: Check
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm db:types --verify
+      - run: pnpm db:schema --verify
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: Remove this job's containers and volumes
+        if: always()
+        shell: bash
+        run: |
+          project=$(node --input-type=module -e "import {createHash} from 'node:crypto'; process.stdout.write('pgstencil-'+createHash('sha256').update(process.cwd()).digest('hex').slice(0,12))")
+          docker compose -p "$project" down --volumes --remove-orphans

@@ -1,0 +1,337 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-06T19:09:06.641438+00:00",
+  "title": "Design System: pgstencil login example",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "tonalRamp": [
+          "oklch(15.00% 0.00671 97.35)",
+          "oklch(26.43% 0.00671 97.35)",
+          "oklch(37.86% 0.00671 97.35)",
+          "oklch(49.29% 0.00671 97.35)",
+          "oklch(60.71% 0.00671 97.35)",
+          "oklch(72.14% 0.00671 97.35)",
+          "oklch(83.57% 0.00671 97.35)",
+          "oklch(95.00% 0.00671 97.35)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.03974 164.07)",
+          "oklch(26.43% 0.03974 164.07)",
+          "oklch(37.86% 0.03974 164.07)",
+          "oklch(49.29% 0.03974 164.07)",
+          "oklch(60.71% 0.03974 164.07)",
+          "oklch(72.14% 0.03974 164.07)",
+          "oklch(83.57% 0.03974 164.07)",
+          "oklch(95.00% 0.03974 164.07)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted",
+        "tonalRamp": [
+          "oklch(15.00% 0.02903 155.98)",
+          "oklch(26.43% 0.02903 155.98)",
+          "oklch(37.86% 0.02903 155.98)",
+          "oklch(49.29% 0.02903 155.98)",
+          "oklch(60.71% 0.02903 155.98)",
+          "oklch(72.14% 0.02903 155.98)",
+          "oklch(83.57% 0.02903 155.98)",
+          "oklch(95.00% 0.02903 155.98)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Line",
+        "tonalRamp": [
+          "oklch(15.00% 0.01680 142.55)",
+          "oklch(26.43% 0.01680 142.55)",
+          "oklch(37.86% 0.01680 142.55)",
+          "oklch(49.29% 0.01680 142.55)",
+          "oklch(60.71% 0.01680 142.55)",
+          "oklch(72.14% 0.01680 142.55)",
+          "oklch(83.57% 0.01680 142.55)",
+          "oklch(95.00% 0.01680 142.55)"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Accent",
+        "tonalRamp": [
+          "oklch(15.00% 0.07591 160.49)",
+          "oklch(26.43% 0.07591 160.49)",
+          "oklch(37.86% 0.07591 160.49)",
+          "oklch(49.29% 0.07591 160.49)",
+          "oklch(60.71% 0.07591 160.49)",
+          "oklch(72.14% 0.07591 160.49)",
+          "oklch(83.57% 0.07591 160.49)",
+          "oklch(95.00% 0.07591 160.49)"
+        ]
+      },
+      "control-surface": {
+        "role": "neutral",
+        "displayName": "Control Surface",
+        "tonalRamp": [
+          "oklch(15.00% 0.00537 95.10)",
+          "oklch(26.43% 0.00537 95.10)",
+          "oklch(37.86% 0.00537 95.10)",
+          "oklch(49.29% 0.00537 95.10)",
+          "oklch(60.71% 0.00537 95.10)",
+          "oklch(72.14% 0.00537 95.10)",
+          "oklch(83.57% 0.00537 95.10)",
+          "oklch(95.00% 0.00537 95.10)"
+        ]
+      },
+      "control-border": {
+        "role": "neutral",
+        "displayName": "Control Border",
+        "tonalRamp": [
+          "oklch(15.00% 0.02707 156.40)",
+          "oklch(26.43% 0.02707 156.40)",
+          "oklch(37.86% 0.02707 156.40)",
+          "oklch(49.29% 0.02707 156.40)",
+          "oklch(60.71% 0.02707 156.40)",
+          "oklch(72.14% 0.02707 156.40)",
+          "oklch(83.57% 0.02707 156.40)",
+          "oklch(95.00% 0.02707 156.40)"
+        ]
+      },
+      "placeholder": {
+        "role": "neutral",
+        "displayName": "Placeholder",
+        "tonalRamp": [
+          "oklch(15.00% 0.02267 154.51)",
+          "oklch(26.43% 0.02267 154.51)",
+          "oklch(37.86% 0.02267 154.51)",
+          "oklch(49.29% 0.02267 154.51)",
+          "oklch(60.71% 0.02267 154.51)",
+          "oklch(72.14% 0.02267 154.51)",
+          "oklch(83.57% 0.02267 154.51)",
+          "oklch(95.00% 0.02267 154.51)"
+        ]
+      },
+      "focus": {
+        "role": "neutral",
+        "displayName": "Focus",
+        "tonalRamp": [
+          "oklch(15.00% 0.07680 156.74)",
+          "oklch(26.43% 0.07680 156.74)",
+          "oklch(37.86% 0.07680 156.74)",
+          "oklch(49.29% 0.07680 156.74)",
+          "oklch(60.71% 0.07680 156.74)",
+          "oklch(72.14% 0.07680 156.74)",
+          "oklch(83.57% 0.07680 156.74)",
+          "oklch(95.00% 0.07680 156.74)"
+        ]
+      },
+      "on-accent": {
+        "role": "neutral",
+        "displayName": "On Accent",
+        "tonalRamp": [
+          "oklch(15.00% 0.00000 89.88)",
+          "oklch(26.43% 0.00000 89.88)",
+          "oklch(37.86% 0.00000 89.88)",
+          "oklch(49.29% 0.00000 89.88)",
+          "oklch(60.71% 0.00000 89.88)",
+          "oklch(72.14% 0.00000 89.88)",
+          "oklch(83.57% 0.00000 89.88)",
+          "oklch(95.00% 0.00000 89.88)"
+        ]
+      },
+      "accent-hover": {
+        "role": "primary",
+        "displayName": "Accent Hover",
+        "tonalRamp": [
+          "oklch(15.00% 0.06754 158.95)",
+          "oklch(26.43% 0.06754 158.95)",
+          "oklch(37.86% 0.06754 158.95)",
+          "oklch(49.29% 0.06754 158.95)",
+          "oklch(60.71% 0.06754 158.95)",
+          "oklch(72.14% 0.06754 158.95)",
+          "oklch(83.57% 0.06754 158.95)",
+          "oklch(95.00% 0.06754 158.95)"
+        ]
+      },
+      "accent-active": {
+        "role": "primary",
+        "displayName": "Accent Active",
+        "tonalRamp": [
+          "oklch(15.00% 0.06242 158.09)",
+          "oklch(26.43% 0.06242 158.09)",
+          "oklch(37.86% 0.06242 158.09)",
+          "oklch(49.29% 0.06242 158.09)",
+          "oklch(60.71% 0.06242 158.09)",
+          "oklch(72.14% 0.06242 158.09)",
+          "oklch(83.57% 0.06242 158.09)",
+          "oklch(95.00% 0.06242 158.09)"
+        ]
+      },
+      "disabled": {
+        "role": "neutral",
+        "displayName": "Disabled",
+        "tonalRamp": [
+          "oklch(15.00% 0.03349 157.24)",
+          "oklch(26.43% 0.03349 157.24)",
+          "oklch(37.86% 0.03349 157.24)",
+          "oklch(49.29% 0.03349 157.24)",
+          "oklch(60.71% 0.03349 157.24)",
+          "oklch(72.14% 0.03349 157.24)",
+          "oklch(83.57% 0.03349 157.24)",
+          "oklch(95.00% 0.03349 157.24)"
+        ]
+      },
+      "error-surface": {
+        "role": "neutral",
+        "displayName": "Error Surface",
+        "tonalRamp": [
+          "oklch(15.00% 0.01763 39.40)",
+          "oklch(26.43% 0.01763 39.40)",
+          "oklch(37.86% 0.01763 39.40)",
+          "oklch(49.29% 0.01763 39.40)",
+          "oklch(60.71% 0.01763 39.40)",
+          "oklch(72.14% 0.01763 39.40)",
+          "oklch(83.57% 0.01763 39.40)",
+          "oklch(95.00% 0.01763 39.40)"
+        ]
+      },
+      "error-border": {
+        "role": "neutral",
+        "displayName": "Error Border",
+        "tonalRamp": [
+          "oklch(15.00% 0.09568 33.10)",
+          "oklch(26.43% 0.09568 33.10)",
+          "oklch(37.86% 0.09568 33.10)",
+          "oklch(49.29% 0.09568 33.10)",
+          "oklch(60.71% 0.09568 33.10)",
+          "oklch(72.14% 0.09568 33.10)",
+          "oklch(83.57% 0.09568 33.10)",
+          "oklch(95.00% 0.09568 33.10)"
+        ]
+      },
+      "error-ink": {
+        "role": "neutral",
+        "displayName": "Error Ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.10827 32.52)",
+          "oklch(26.43% 0.10827 32.52)",
+          "oklch(37.86% 0.10827 32.52)",
+          "oklch(49.29% 0.10827 32.52)",
+          "oklch(60.71% 0.10827 32.52)",
+          "oklch(72.14% 0.10827 32.52)",
+          "oklch(83.57% 0.10827 32.52)",
+          "oklch(95.00% 0.10827 32.52)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "body": {
+        "displayName": "Body",
+        "purpose": "Instructions and field text."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Persistent field labels."
+      },
+      "button": {
+        "displayName": "Button",
+        "purpose": "Primary form actions."
+      },
+      "note": {
+        "displayName": "Note",
+        "purpose": "Recovery, expiry and supporting copy."
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "compact",
+        "value": "560px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Full-width form submission with keyboard focus and interaction states.",
+      "html": "<button class=\"ds-primary\" type=\"button\">Send sign-in code</button>",
+      "css": ".ds-primary{display:flex;align-items:center;justify-content:space-between;width:100%;margin-top:20px;padding:14px 18px;border:0;border-radius:6px;color:#fff;background:var(--accent,#245e43);font:600 16px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;cursor:pointer}.ds-primary:hover{background:#194a32}.ds-primary:active{background:#123e28}.ds-primary:disabled{background:#667c6e;cursor:wait}.ds-primary:focus-visible{outline:3px solid #4a8060;outline-offset:4px;}"
+    },
+    {
+      "name": "Recovery button",
+      "kind": "button",
+      "refersTo": "button-text",
+      "description": "Underlined secondary action used for resending a code.",
+      "html": "<button class=\"ds-text\" type=\"button\">Send a new code</button>",
+      "css": ".ds-text{display:flex;align-items:center;justify-content:space-between;width:100%;padding:0;margin:0;border:0;border-radius:0;background:none;color:var(--accent,#245e43);font:400 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;text-decoration:underline;text-underline-offset:4px;cursor:pointer}.ds-text:hover{background:none;color:#123e28}.ds-text:active{background:#123e28}.ds-text:focus-visible{outline:3px solid #4a8060;outline-offset:4px;}"
+    },
+    {
+      "name": "Email field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Persistent label and native email input.",
+      "html": "<label class=\"ds-label\" for=\"ds-email\">Email address</label><input class=\"ds-input\" id=\"ds-email\" name=\"email\" type=\"email\" autocomplete=\"email\" maxlength=\"254\" placeholder=\"you@example.com\" required>",
+      "css": ".ds-label{display:block;color:var(--ink,#203b2f);font:600 17px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;margin-bottom:8px}.ds-input{width:100%;background:#fffefa;color:var(--ink,#203b2f);font:400 17px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;padding:14px 16px;border:1px solid #84968a;border-radius:6px}.ds-input::placeholder{color:#68766c}.ds-input:focus-visible{outline:3px solid #4a8060;outline-offset:4px;}"
+    },
+    {
+      "name": "Recovery navigation",
+      "kind": "nav",
+      "description": "Wrapping row of resend and alternate-email actions.",
+      "html": "<div class=\"ds-recovery\"><button class=\"ds-resend\" type=\"button\">Send a new code</button><a class=\"ds-link\" href=\"/login\">Use another email</a></div>",
+      "css": ".ds-recovery{margin-top:28px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:16px;font:400 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif}.ds-resend{padding:0;margin:0;border:0;border-radius:0;background:none;font:inherit;cursor:pointer}.ds-resend,.ds-link{color:var(--accent,#245e43);text-decoration:underline;text-underline-offset:4px}.ds-resend:hover,.ds-link:hover{color:#123e28}.ds-resend:focus-visible,.ds-link:focus-visible{outline:3px solid #4a8060;outline-offset:4px;}"
+    },
+    {
+      "name": "Error message",
+      "kind": "custom",
+      "refersTo": "error",
+      "description": "Explicit form failure announced as an alert.",
+      "html": "<p class=\"ds-error\" role=\"alert\">That code is invalid or has expired.</p>",
+      "css": ".ds-error{padding:14px 16px;border:1px solid #bf7666;border-radius:6px;background:#fff0eb;color:#792e20;font:400 17px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Warm paper and forest native forms",
+    "overview": "This small operational interface uses quiet surfaces, readable labels and familiar HTML controls. Forest green identifies actions; warm paper carries the page. Instructions and recovery links remain close to the task.\n\nThis record describes the implemented example in `src/style.css`, `src/views.ts` and `src/app.ts`, bounded to `examples/login`. Its direction contract is identified by seed `93f1c640`. The finish reviewer returned **ship**; mobile screenshots were unavailable, so responsive behavior below is verified from source only.",
+    "keyCharacteristics": [
+      "Restrained forest accent on warm paper.",
+      "A narrow, single-column task area.",
+      "Persistent labels, explicit errors and visible recovery.",
+      "Native forms that work without client JavaScript."
+    ],
+    "rules": [
+      {
+        "name": "The Action Accent Rule",
+        "body": "Use forest green for actionable controls and links; keep supporting copy in muted ink.",
+        "section": "colors"
+      },
+      {
+        "name": "The Visible Label Rule",
+        "body": "Keep a persistent label above each field; placeholder text supplies an example only.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Surface Rule",
+        "body": "Use surface tone and borders for separation, preserving the existing flat form language.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do preserve native form submission, explicit field labels and visible keyboard focus.",
+      "Do keep recovery actions close to the failed or pending task.",
+      "Do allow long email addresses and recovery actions to wrap."
+    ],
+    "donts": [
+      "Don't replace visible labels with placeholders.",
+      "Don't use color alone to communicate errors.",
+      "Don't require client JavaScript for the sign-in flow."
+    ]
+  }
+}

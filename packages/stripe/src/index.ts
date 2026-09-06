@@ -14,6 +14,8 @@ export interface BillingConfig {
   origin: string;
   returnPath?: string;
   portalConfiguration?: string;
+  /** Origins this billing setup redirects the browser to; defaults to Stripe's. */
+  redirectOrigins?: readonly string[];
 }
 export class BillingError extends Error {
   constructor(
@@ -35,11 +37,20 @@ const SUBSCRIBED = [
 const idOf = (value: string | { id: string } | null): string | null =>
   typeof value === 'string' ? value : (value?.id ?? null);
 const instant = (seconds: number) => new Date(seconds * 1000);
+/** Stripe idempotency keys expire after 24h; refuse to reuse one near that edge. */
+const RETRY_WINDOW_MS = 23 * 3600000;
+const STRIPE_REDIRECT_ORIGINS = [
+  'https://checkout.stripe.com',
+  'https://billing.stripe.com',
+];
 
 /** Owns billing state; HTTP adapters supply an already-authorized owner ID. */
 export class Billing {
   readonly db: Kysely<BillingDB>;
   readonly returnUrl: string;
+  /** Hosts a caller must allow in its CSP form-action for Checkout to work. */
+  readonly redirectOrigins: readonly string[];
+  private readonly plans: ReadonlyMap<string, Plan>;
   constructor(
     db: Kysely<BillingDB>,
     readonly stripe: Stripe,
@@ -70,8 +81,29 @@ export class Billing {
     ).href;
     if (new URL(this.returnUrl).origin !== config.origin)
       throw new Error('Billing return URL must be same-origin');
+    this.redirectOrigins = config.redirectOrigins ?? STRIPE_REDIRECT_ORIGINS;
+    for (const value of this.redirectOrigins)
+      if (new URL(value).origin !== value)
+        throw new Error('Billing redirect origins must be origins only');
+    this.plans = new Map(
+      (Object.entries(config.prices) as [Plan, string][]).map(([plan, id]) => [
+        id,
+        plan,
+      ]),
+    );
   }
-  async account(ownerId: string, email: string) {
+  /** A retired price no longer maps to a plan, so report it as unknown. */
+  private planOf(priceId: string | null | undefined): Plan | null {
+    return (priceId && this.plans.get(priceId)) || null;
+  }
+  private assertRetryable(startedAt: Date, what: string): void {
+    if (this.time.now().getTime() - startedAt.getTime() >= RETRY_WINDOW_MS)
+      throw new BillingError(
+        `${what} creation needs reconciliation before retrying.`,
+      );
+  }
+  /** Ensures the owner has a billing account row. Safe to call on every view. */
+  async account(ownerId: string, email: string): Promise<void> {
     if (!ownerId || !email)
       throw new Error('Billing requires an owner and email');
     await this.db
@@ -87,11 +119,6 @@ export class Billing {
       })
       .onConflict((c) => c.column('owner_id').doNothing())
       .execute();
-    return this.db
-      .selectFrom('accounts')
-      .selectAll()
-      .where('owner_id', '=', ownerId)
-      .executeTakeFirstOrThrow();
   }
   private async customer(ownerId: string, email: string): Promise<string> {
     await this.account(ownerId, email);
@@ -115,13 +142,7 @@ export class Billing {
       return row;
     });
     if (account.customer_id) return account.customer_id;
-    if (
-      this.time.now().getTime() - account.customer_started_at!.getTime() >=
-      23 * 3600000
-    )
-      throw new BillingError(
-        'Customer creation needs reconciliation before retrying.',
-      );
+    this.assertRetryable(account.customer_started_at!, 'Customer');
     const customer = await this.stripe.customers.create(
       { email: account.email, metadata: { pgstencil_owner: ownerId } },
       { idempotencyKey: account.customer_key! },
@@ -189,15 +210,10 @@ export class Billing {
         .returningAll()
         .executeTakeFirstOrThrow();
     });
+    let created: Stripe.Checkout.Session | undefined;
     if (!operation.session_id) {
       // Save the operation before network I/O. Its retry key and parameters never change.
-      if (
-        this.time.now().getTime() - operation.created_at.getTime() >=
-        23 * 3600000
-      )
-        throw new BillingError(
-          'Checkout creation needs reconciliation before retrying.',
-        );
+      this.assertRetryable(operation.created_at, 'Checkout');
       const success = new URL(this.returnUrl);
       success.searchParams.set('checkout', operation.id);
       const session = await this.stripe.checkout.sessions.create(
@@ -230,6 +246,7 @@ export class Billing {
         { idempotencyKey: operation.id },
       );
       if (!session.url) throw new Error('Stripe did not return a checkout URL');
+      created = session;
       operation = await this.db
         .updateTable('checkouts')
         .set({ session_id: session.id, url: session.url, status: 'open' })
@@ -237,9 +254,10 @@ export class Billing {
         .returningAll()
         .executeTakeFirstOrThrow();
     }
-    const session = await this.stripe.checkout.sessions.retrieve(
-      operation.session_id!,
-    );
+    // A session we just created needs no round trip to read back.
+    const session =
+      created ??
+      (await this.stripe.checkout.sessions.retrieve(operation.session_id!));
     if (session.status === 'expired') {
       await this.db
         .updateTable('checkouts')
@@ -249,7 +267,7 @@ export class Billing {
       throw new BillingError('Checkout expired. Start again.');
     }
     if (session.status === 'complete') {
-      await this.confirmCheckout(ownerId, operation.id);
+      await this.confirmCheckout(ownerId, operation.id, session);
       throw new BillingError('Checkout is complete. Refresh billing.');
     }
     return { id: operation.id, url: session.url ?? operation.url! };
@@ -268,7 +286,7 @@ export class Billing {
       operation.session_id,
     );
     if (session.status === 'complete') {
-      await this.confirmCheckout(ownerId, operation.id);
+      await this.confirmCheckout(ownerId, operation.id, session);
       return;
     }
     if (session.status === 'open')
@@ -279,7 +297,11 @@ export class Billing {
       .where('id', '=', operation.id)
       .execute();
   }
-  async confirmCheckout(ownerId: string, operationId: string): Promise<void> {
+  async confirmCheckout(
+    ownerId: string,
+    operationId: string,
+    known?: Stripe.Checkout.Session,
+  ): Promise<void> {
     const operation = await this.db
       .selectFrom('checkouts')
       .selectAll()
@@ -293,9 +315,9 @@ export class Billing {
       .selectAll()
       .where('owner_id', '=', ownerId)
       .executeTakeFirstOrThrow();
-    const session = await this.stripe.checkout.sessions.retrieve(
-      operation.session_id,
-    );
+    const session =
+      known ??
+      (await this.stripe.checkout.sessions.retrieve(operation.session_id));
     if (
       session.client_reference_id !== ownerId ||
       idOf(session.customer) !== account.customer_id ||
@@ -350,51 +372,73 @@ export class Billing {
     const recognized = subscriptions.data.filter(
       (sub) => sub.metadata.pgstencil_owner === ownerId,
     );
-    // A complete list is authoritative, including subscriptions that disappeared.
-    await trx
-      .updateTable('subscriptions')
-      .set({ status: 'missing' })
-      .where('owner_id', '=', ownerId)
-      .execute();
-    for (const sub of recognized) {
+    const now = this.time.now();
+    const rows = recognized.map((sub) => {
       const item = sub.items.data[0];
       if (
         idOf(sub.customer) !== account.customer_id ||
         sub.items.data.length !== 1 ||
         !item ||
-        !Object.values(this.config.prices).includes(item.price.id) ||
+        !this.planOf(item.price.id) ||
         item.quantity !== 1 ||
         sub.livemode !== this.config.live
       )
         throw new Error('Subscription configuration mismatch');
-      const values = {
+      return {
+        id: sub.id,
         owner_id: ownerId,
         price_id: item.price.id,
         status: sub.status,
         period_end: instant(item.current_period_end),
         trial_end: sub.trial_end === null ? null : instant(sub.trial_end),
         cancel_at_period_end: sub.cancel_at_period_end,
-        updated_at: this.time.now(),
+        updated_at: now,
       };
+    });
+    // A complete list is authoritative, including subscriptions that
+    // disappeared, but rows we are about to rewrite need no interim update.
+    let missing = trx
+      .updateTable('subscriptions')
+      .set({ status: 'missing' })
+      .where('owner_id', '=', ownerId);
+    if (rows.length)
+      missing = missing.where(
+        'id',
+        'not in',
+        rows.map((row) => row.id),
+      );
+    await missing.execute();
+    if (rows.length)
       await trx
         .insertInto('subscriptions')
-        .values({ id: sub.id, ...values })
-        .onConflict((c) => c.column('id').doUpdateSet(values))
+        .values(rows)
+        .onConflict((c) =>
+          c.column('id').doUpdateSet((eb) => ({
+            owner_id: eb.ref('excluded.owner_id'),
+            price_id: eb.ref('excluded.price_id'),
+            status: eb.ref('excluded.status'),
+            period_end: eb.ref('excluded.period_end'),
+            trial_end: eb.ref('excluded.trial_end'),
+            cancel_at_period_end: eb.ref('excluded.cancel_at_period_end'),
+            updated_at: eb.ref('excluded.updated_at'),
+          })),
+        )
         .execute();
-      if (sub.metadata.pgstencil_operation) {
-        await trx
-          .updateTable('checkouts')
-          .set({ status: 'complete' })
-          .where('owner_id', '=', ownerId)
-          .where('id', '=', sub.metadata.pgstencil_operation)
-          .where('status', 'in', OPEN)
-          .execute();
-      }
-    }
+    const operations = recognized
+      .map((sub) => sub.metadata.pgstencil_operation)
+      .filter((id): id is string => !!id);
+    if (operations.length)
+      await trx
+        .updateTable('checkouts')
+        .set({ status: 'complete' })
+        .where('owner_id', '=', ownerId)
+        .where('id', 'in', operations)
+        .where('status', 'in', OPEN)
+        .execute();
     if (recognized.length) {
       await trx
         .updateTable('accounts')
-        .set({ trial_used_at: account.trial_used_at ?? this.time.now() })
+        .set({ trial_used_at: account.trial_used_at ?? now })
         .where('owner_id', '=', ownerId)
         .execute();
     }
@@ -431,27 +475,35 @@ export class Billing {
       ['trialing', 'active'].includes(subscription.status) &&
       !!until &&
       until > this.time.now();
+    const trialEligible = !account?.trial_used_at;
     return {
       access,
-      trialEligible: !account?.trial_used_at,
+      trialEligible,
       subscription,
-      plan: subscription
-        ? subscription.price_id === this.config.prices.monthly
-          ? 'monthly'
-          : 'yearly'
-        : null,
+      plan: this.planOf(subscription?.price_id),
       accessUntil: until ?? null,
+      // What a checkout started now would grant, so callers render one value.
+      trialDays: trialEligible ? this.config.trialDays : 0,
     };
   }
+  /** Throws BillingError(400) for anything the sender got wrong. */
   verifyWebhook(body: Buffer | string, signature: string): Stripe.Event {
-    const event = this.stripe.webhooks.constructEvent(
-      body,
-      signature,
-      this.config.webhookSecret,
-      300,
-      undefined,
-      this.time.now().getTime(),
-    );
+    let event: Stripe.Event;
+    try {
+      event = this.stripe.webhooks.constructEvent(
+        body,
+        signature,
+        this.config.webhookSecret,
+        300,
+        undefined,
+        this.time.now().getTime(),
+      );
+    } catch (error) {
+      throw new BillingError(
+        error instanceof Error ? error.message : 'Invalid Stripe signature.',
+        400,
+      );
+    }
     if (
       event.livemode !== this.config.live ||
       event.api_version !== STRIPE_API_VERSION ||
@@ -460,11 +512,7 @@ export class Billing {
       throw new BillingError('Unexpected Stripe event configuration.', 400);
     return event;
   }
-  async webhook(
-    body: Buffer | string,
-    signature: string,
-    extra?: (event: Stripe.Event) => Promise<void>,
-  ): Promise<void> {
+  async webhook(body: Buffer | string, signature: string): Promise<void> {
     const event = this.verifyWebhook(body, signature);
     try {
       await this.db.transaction().execute(async (trx) => {
@@ -477,16 +525,13 @@ export class Billing {
           .where('id', '=', event.id)
           .executeTakeFirst();
         if (saved?.processed_at) return;
+        // Any event naming a customer we own triggers the same authoritative
+        // resync, so no per-type allowlist can silently drop an update.
         const object = event.data.object as {
           customer?: string | { id: string } | null;
         };
         const customer = idOf(object.customer ?? null);
-        if (
-          customer &&
-          (event.type.startsWith('customer.subscription.') ||
-            event.type.startsWith('invoice.') ||
-            event.type.startsWith('checkout.session.'))
-        ) {
+        if (customer) {
           const account = await trx
             .selectFrom('accounts')
             .select('owner_id')
@@ -494,24 +539,21 @@ export class Billing {
             .executeTakeFirst();
           if (account) await this.synchronize(trx, account.owner_id);
         }
-        if (extra) await extra(event);
+        const now = this.time.now();
+        const processed = {
+          processed_at: now,
+          failed: false,
+          attempts: (saved?.attempts ?? 0) + 1,
+        };
         await trx
           .insertInto('events')
           .values({
             id: event.id,
             type: event.type,
-            received_at: this.time.now(),
-            processed_at: this.time.now(),
-            attempts: (saved?.attempts ?? 0) + 1,
-            failed: false,
+            received_at: now,
+            ...processed,
           })
-          .onConflict((c) =>
-            c.column('id').doUpdateSet({
-              processed_at: this.time.now(),
-              failed: false,
-              attempts: (saved?.attempts ?? 0) + 1,
-            }),
-          )
+          .onConflict((c) => c.column('id').doUpdateSet(processed))
           .execute();
       });
     } catch (error) {

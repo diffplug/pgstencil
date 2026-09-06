@@ -1,15 +1,11 @@
 import { DevTime, SystemTime, DevRandom, EmailDev } from 'pgstencil';
 import { randomUUID } from 'node:crypto';
-import {
-  developmentDatabase,
-  defaultMigrations,
-  stateDirectory,
-} from 'pgstencil/database';
+import { developmentDatabase, stateDirectory } from 'pgstencil/database';
 import { join } from 'node:path';
-import { billingMigrations } from '@pgstencil/stripe/migrations';
 import { createStripeDev } from '@pgstencil/stripe/testing';
 import { startApp } from './app.ts';
 import { oauthFromEnvironment } from './oauth-providers.ts';
+import { appMigrations } from './migrations.ts';
 const oauth = oauthFromEnvironment(process.env);
 const publicOrigin = process.env.PUBLIC_ORIGIN;
 const port = Number(process.env.PORT ?? 0);
@@ -33,10 +29,7 @@ const stripeDev = await createStripeDev(
   join(stateDirectory, 'stripe-dev.json'),
 );
 const app = await startApp({
-  databaseUrl: await developmentDatabase(true, [
-    defaultMigrations,
-    billingMigrations,
-  ]),
+  databaseUrl: await developmentDatabase(true, [...appMigrations]),
   time,
   random,
   email,
@@ -47,12 +40,13 @@ const app = await startApp({
   oauth,
   billing: {
     stripe: stripeDev.stripe,
-    devOrigin: stripeDev.origin,
     config: {
       prices: stripeDev.prices,
       trialDays: 14,
       webhookSecret: stripeDev.webhookSecret,
       live: false,
+      // Checkout is served by the local simulator, so it owns the CSP entry.
+      redirectOrigins: [stripeDev.origin],
     },
   },
   ...(publicOrigin ? { publicOrigin } : {}),

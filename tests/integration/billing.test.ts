@@ -1,21 +1,18 @@
 import { test, expect } from 'vitest';
 import { createTestContext } from '../../packages/pgstencil/src/testing.ts';
-import {
-  connectDatabase,
-  defaultMigrations,
-} from '../../packages/pgstencil/src/database.ts';
+import { connectDatabase } from '../../packages/pgstencil/src/database.ts';
 import {
   Billing,
   STRIPE_API_VERSION,
   type BillingDB,
 } from '../../packages/stripe/src/index.ts';
-import { billingMigrations } from '../../packages/stripe/src/migrations.ts';
+import { appMigrations } from '../../examples/login/src/migrations.ts';
 import { createStripeDev } from '../../packages/stripe/src/testing.ts';
 import { stableJson } from '../../packages/pgstencil/src/snapshots.ts';
 
 async function fixture() {
   const context = await createTestContext({
-    migrations: [defaultMigrations, billingMigrations],
+    migrations: appMigrations,
   });
   const dev = await createStripeDev(context.time, context.random);
   const db = connectDatabase<BillingDB>(context.database.url);

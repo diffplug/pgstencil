@@ -21,8 +21,7 @@ import {
   stateDirectory,
   type Services,
 } from '../packages/pgstencil/src/database.ts';
-import { billingMigrations } from '../packages/stripe/src/migrations.ts';
-const migrations = [defaultMigrations, billingMigrations];
+import { appMigrations as migrations } from '../examples/login/src/migrations.ts';
 const exec = promisify(execFile);
 const command = process.argv[2];
 const statePath = join(stateDirectory, 'services.json');

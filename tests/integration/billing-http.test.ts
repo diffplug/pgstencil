@@ -1,19 +1,18 @@
 import { test, expect } from 'vitest';
 import request from 'supertest';
 import { createTestContext } from '../../packages/pgstencil/src/testing.ts';
-import { defaultMigrations } from '../../packages/pgstencil/src/database.ts';
 import {
   captureResponse,
   stableJson,
 } from '../../packages/pgstencil/src/snapshots.ts';
+import { appMigrations } from '../../examples/login/src/migrations.ts';
 import { createStripeDev } from '../../packages/stripe/src/testing.ts';
-import { billingMigrations } from '../../packages/stripe/src/migrations.ts';
 import { startApp } from '../../examples/login/src/app.ts';
 import { begin, cookies, post, field } from './helpers.ts';
 
 async function fixture() {
   const context = await createTestContext({
-    migrations: [defaultMigrations, billingMigrations],
+    migrations: appMigrations,
   });
   const dev = await createStripeDev(context.time, context.random);
   const app = await startApp({
@@ -25,12 +24,12 @@ async function fixture() {
     secret: 'pgstencil-billing-test-secret-at-least-32',
     billing: {
       stripe: dev.stripe,
-      devOrigin: dev.origin,
       config: {
         prices: dev.prices,
         trialDays: 14,
         webhookSecret: dev.webhookSecret,
         live: false,
+        redirectOrigins: [dev.origin],
       },
     },
   });

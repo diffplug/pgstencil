@@ -4,7 +4,6 @@ import { date, escape, hidden, page } from './views.ts';
 export function billingPage(
   state: Awaited<ReturnType<Billing['status']>>,
   csrf: string,
-  trialDays: number,
   showInbox: boolean,
 ) {
   const current = state.subscription;
@@ -15,8 +14,8 @@ export function billingPage(
   const offer =
     current?.status === 'trialing'
       ? '<p>Your card will be charged when the trial ends unless you cancel first.</p>'
-      : state.trialEligible && trialDays > 0
-        ? `<p>Your ${trialDays}-day free trial starts after you provide a card in Checkout. Stripe will charge the selected plan when the trial ends unless you cancel first.</p>`
+      : state.trialDays > 0
+        ? `<p>Your ${state.trialDays}-day free trial starts after you provide a card in Checkout. Stripe will charge the selected plan when the trial ends unless you cancel first.</p>`
         : '<p>Payment is due when you subscribe. Your free trial has already been used.</p>';
   const form = (path: string, label: string, extra = '') =>
     `<form method="post" action="${path}">${hidden('csrf', csrf)}${extra}<button type="submit">${label}</button></form>`;

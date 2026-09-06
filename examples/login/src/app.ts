@@ -36,6 +36,7 @@ import {
   BillingError,
   type BillingConfig,
   type BillingDB,
+  type Plan,
   type Stripe,
 } from '@pgstencil/stripe';
 import type { Kysely } from 'kysely';
@@ -66,11 +67,24 @@ export interface AppConfig {
   billing?: {
     stripe: Stripe;
     config: Omit<BillingConfig, 'origin'>;
-    /** Local simulator origin, accepted only in development. */
-    devOrigin?: string;
   };
 }
 const MAX_BODY_BYTES = 8192;
+const WEBHOOK_BODY_BYTES = 1024 * 1024;
+/** Collects a capped request body, or undefined when the cap is exceeded. */
+async function readBody(
+  req: IncomingMessage,
+  limit: number,
+): Promise<Buffer | undefined> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > limit) return undefined;
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
 const OAUTH_ROUTE = /^\/oauth\/([^/]+)\/(start|connect|callback)$/;
 type OAuthAction = 'start' | 'connect' | 'callback';
 // Every instance serves the same stylesheet: read it once per process.
@@ -145,7 +159,7 @@ export async function startApp(config: AppConfig) {
       .map((provider) => ` ${PROVIDER_ORIGINS[provider]}`)
       .join(
         '',
-      )}${billing ? ' https://checkout.stripe.com https://billing.stripe.com' : ''}${development && config.billing?.devOrigin ? ` ${new URL(config.billing.devOrigin).origin}` : ''}; base-uri 'none'; frame-ancestors 'none'`;
+      )}${billing ? billing.redirectOrigins.map((value) => ` ${value}`).join('') : ''}; base-uri 'none'; frame-ancestors 'none'`;
     const sessionName = secure ? '__Host-pgstencil' : 'pgstencil_dev';
     const pendingName = secure
       ? '__Host-pgstencil-pending'
@@ -176,6 +190,27 @@ export async function startApp(config: AppConfig) {
     ) {
       send(res, status, page(title, body, showInbox));
     }
+    function denyCsrf(res: ServerResponse) {
+      fail(
+        res,
+        403,
+        'Request not accepted.',
+        '<p>Return to your account and try again.</p>',
+      );
+    }
+    function billingFailure(
+      res: ServerResponse,
+      error: unknown,
+      recovery = '',
+    ) {
+      const known = error instanceof BillingError;
+      fail(
+        res,
+        known ? error.status : 503,
+        'Billing unavailable.',
+        `${errorMessage(known ? error.message : 'Please try again shortly.')}${recovery}`,
+      );
+    }
     function redirect(res: ServerResponse, path: string) {
       res.statusCode = 303;
       res.setHeader('location', path);
@@ -194,33 +229,25 @@ export async function startApp(config: AppConfig) {
         req.method === 'POST' &&
         url.pathname === '/webhooks/stripe'
       ) {
-        const chunks: Buffer[] = [];
-        let size = 0;
-        for await (const chunk of req) {
-          size += (chunk as Buffer).length;
-          if (size > 1024 * 1024) {
-            res.writeHead(413).end();
-            return;
-          }
-          chunks.push(Buffer.from(chunk));
-        }
+        // Reject before buffering: an unsigned request never reaches the parser.
         const signature = req.headers['stripe-signature'];
         if (typeof signature !== 'string') {
           res.writeHead(400).end();
           return;
         }
-        const body = Buffer.concat(chunks);
-        try {
-          billing.verifyWebhook(body, signature);
-        } catch {
-          res.writeHead(400).end();
+        const body = await readBody(req, WEBHOOK_BODY_BYTES);
+        if (body === undefined) {
+          res.writeHead(413).end();
           return;
         }
         try {
+          // A bad signature is a typed 400; anything else is an outage.
           await billing.webhook(body, signature);
           res.writeHead(200).end();
-        } catch {
-          res.writeHead(503).end();
+        } catch (error) {
+          res
+            .writeHead(error instanceof BillingError ? error.status : 503)
+            .end();
         }
         return;
       }
@@ -250,21 +277,11 @@ export async function startApp(config: AppConfig) {
             billingPage(
               await billing.status(session.user_id),
               auth.sessionCsrf(rawSession!),
-              billing.config.trialDays,
               showInbox,
             ),
           );
         } catch (error) {
-          fail(
-            res,
-            error instanceof BillingError ? error.status : 503,
-            'Billing unavailable.',
-            errorMessage(
-              error instanceof BillingError
-                ? error.message
-                : 'Please try again shortly.',
-            ),
-          );
+          billingFailure(res, error);
         }
         return;
       }
@@ -407,38 +424,30 @@ export async function startApp(config: AppConfig) {
           );
           return;
         }
-        let body = '';
-        let received = 0;
-        for await (const chunk of req) {
-          received += (chunk as Buffer).length;
-          if (received > MAX_BODY_BYTES) {
-            fail(res, 413, 'Request too large.', '<p>Please try again.</p>');
-            return;
-          }
-          body += String(chunk);
+        const raw = await readBody(req, MAX_BODY_BYTES);
+        if (raw === undefined) {
+          fail(res, 413, 'Request too large.', '<p>Please try again.</p>');
+          return;
         }
-        const form = new URLSearchParams(body);
+        const form = new URLSearchParams(raw.toString());
         const csrf = form.get('csrf') ?? '';
         if (billing && url.pathname.startsWith('/billing/')) {
           const session = await auth.session(rawSession);
-          if (!session || !equalDigest(session.csrf_hash, digest(csrf))) {
-            fail(
-              res,
-              403,
-              'Request not accepted.',
-              '<p>Return to your account and try again.</p>',
-            );
+          if (!auth.validSessionCsrf(session, csrf)) {
+            denyCsrf(res);
             return;
           }
           try {
             if (url.pathname === '/billing/checkout') {
-              const plan = form.get('plan');
-              if (plan !== 'monthly' && plan !== 'yearly')
-                throw new BillingError('Choose monthly or yearly.', 400);
               redirect(
                 res,
-                (await billing.checkout(session.user_id, session.email, plan))
-                  .url,
+                (
+                  await billing.checkout(
+                    session.user_id,
+                    session.email,
+                    form.get('plan') as Plan,
+                  )
+                ).url,
               );
             } else if (url.pathname === '/billing/portal')
               redirect(res, await billing.portal(session.user_id));
@@ -453,11 +462,10 @@ export async function startApp(config: AppConfig) {
                 '<a href="/billing">Return to billing</a>',
               );
           } catch (error) {
-            fail(
+            billingFailure(
               res,
-              error instanceof BillingError ? error.status : 503,
-              'Billing unavailable.',
-              `${errorMessage(error instanceof BillingError ? error.message : 'Please try again shortly.')}<a href="/billing">Return to billing</a>`,
+              error,
+              '<a href="/billing">Return to billing</a>',
             );
           }
           return;
@@ -468,7 +476,7 @@ export async function startApp(config: AppConfig) {
           const session = linking ? await auth.session(rawSession) : undefined;
           const pending = linking ? undefined : await getPending();
           const valid = linking
-            ? session && equalDigest(session.csrf_hash, digest(csrf))
+            ? auth.validSessionCsrf(session, csrf)
             : pending && auth.validCsrf(pending, csrf);
           if (!valid) {
             fail(
@@ -503,13 +511,8 @@ export async function startApp(config: AppConfig) {
         }
         if (url.pathname === '/logout') {
           const session = await auth.session(rawSession);
-          if (!session || !equalDigest(session.csrf_hash, digest(csrf))) {
-            fail(
-              res,
-              403,
-              'Request not accepted.',
-              '<p>Return to your account and try again.</p>',
-            );
+          if (!auth.validSessionCsrf(session, csrf)) {
+            denyCsrf(res);
             return;
           }
           await auth.logout(rawSession!);

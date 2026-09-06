@@ -84,6 +84,13 @@ export class Auth {
   validCsrf(pending: Pending, csrf: string): boolean {
     return equalDigest(pending.flow.csrf_hash, digest(csrf));
   }
+  /** The session-scoped counterpart of validCsrf, for signed-in form posts. */
+  validSessionCsrf(
+    session: SessionRow | undefined,
+    csrf: string,
+  ): session is SessionRow {
+    return !!session && equalDigest(session.csrf_hash, digest(csrf));
+  }
   private async rate(
     trx: Transaction<DB>,
     keys: { key: string; limit: number }[],

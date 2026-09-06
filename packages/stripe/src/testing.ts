@@ -41,21 +41,22 @@ export async function createStripeDev(
     for (const [key, value] of state.idempotency) idempotency.set(key, value);
     events.push(...state.events);
   }
+  let saved = '';
   function save() {
     if (!statePath) return;
+    const text = JSON.stringify({
+      customers: [...customers],
+      checkouts: [...checkouts],
+      subscriptions: [...subscriptions],
+      parameters: [...parameters].map(([k, v]) => [k, v.toString()]),
+      idempotency: [...idempotency],
+      events,
+    });
+    // Reads outnumber writes here; skip the rewrite when nothing changed.
+    if (text === saved) return;
+    saved = text;
     mkdirSync(dirname(statePath), { recursive: true });
-    writeFileSync(
-      `${statePath}.tmp`,
-      JSON.stringify({
-        customers: [...customers],
-        checkouts: [...checkouts],
-        subscriptions: [...subscriptions],
-        parameters: [...parameters].map(([k, v]) => [k, v.toString()]),
-        idempotency: [...idempotency],
-        events,
-      }),
-      { mode: 0o600 },
-    );
+    writeFileSync(`${statePath}.tmp`, text, { mode: 0o600 });
     renameSync(`${statePath}.tmp`, statePath);
   }
   const prices = { monthly: 'price_dev_monthly', yearly: 'price_dev_yearly' };
@@ -135,13 +136,11 @@ export async function createStripeDev(
   }
   function transition(
     subscriptionId: string,
-    action:
-      'renew' | 'payment-failed' | 'cancel' | 'cancel-at-period-end' | 'resume',
+    action: 'renew' | 'payment-failed' | 'cancel' | 'cancel-at-period-end',
   ) {
     const sub = subscriptions.get(subscriptionId);
     if (!sub) throw new Error('Subscription not found');
-    if (action === 'cancel-at-period-end' || action === 'resume')
-      sub.cancel_at_period_end = action === 'cancel-at-period-end';
+    if (action === 'cancel-at-period-end') sub.cancel_at_period_end = true;
     else if (action === 'cancel') sub.status = 'canceled';
     else {
       sub.status = action === 'renew' ? 'active' : 'past_due';
@@ -364,6 +363,7 @@ export async function createStripeDev(
           'stripe-signature': signature,
         },
         body,
+        signal: AbortSignal.timeout(5000),
       });
       if (!response.ok)
         throw new Error(`Webhook delivery failed: ${response.status}`);
@@ -378,7 +378,6 @@ export async function createStripeDev(
     origin,
     customers,
     checkouts,
-    subscriptions,
     requests,
     events,
     completeCheckout,

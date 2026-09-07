@@ -32,7 +32,7 @@ Use `PORT=3000 pnpm dev` for a fixed port. Development uses real time so cooldow
 | Email              | Injected `EmailSender`, with `EmailDev` capture, waiting, unread checks and preview routes           |
 | Snapshots          | Vitest file snapshots plus local JSON, response, HTML, Markdown and email captures                   |
 
-`packages/pgstencil` is a private source package in this workspace. Its `pgstencil/postgres` export is the runtime connection layer; `pgstencil/database` and `pgstencil/testing` include local Docker infrastructure. `examples/login` is a complete consumer, using Node's HTTP server and native HTML forms. No frontend framework is required.
+The workspace contains `pgstencil`, `@pgstencil/auth`, and `@pgstencil/stripe`. They are not yet published to npm; [PACKAGES.md](PACKAGES.md) explains consumption through compiled local tarballs. The core package's `pgstencil/postgres` export is the runtime connection layer; `pgstencil/database` and `pgstencil/testing` include local Docker infrastructure. `examples/login` is a complete consumer, using Node's HTTP server and native HTML forms. No frontend framework is required.
 
 ## Write a test
 
@@ -128,14 +128,18 @@ Native forms require an actual `Origin`; `strict-origin` referrer policy preserv
 
 Optional Google/GitHub login uses PKCE, browser-bound one-time attempts, verified provider identities, and explicit account linking. Pass `oauth: oauthFromEnvironment(process.env)` to the production wrapper to enable configured providers. [OAUTH.md](OAUTH.md) documents its security contract and remaining live-provider checks.
 
-This is an example authentication application; email sign-in remains an available recovery method for the stored address. Provider delivery retries, expired-row retention, account recovery policy, passkeys/MFA, distributed deployment configuration and published package packaging remain extension work. Test helpers and deterministic random sources are not production dependencies to inject.
+This is an example authentication application; email sign-in remains an available recovery method for the stored address. Provider delivery retries, expired-row retention, account recovery policy, passkeys/MFA, distributed deployment configuration and npm release automation remain extension work. Test helpers and deterministic random sources are not production dependencies to inject.
 
 ## Verification
 
-GitHub Actions installs with the frozen lockfile on Node 24/Linux, verifies formatting, generated schema/types, typechecks, and runs the complete Docker suite before removing that job's containers and volumes. Local editor typechecking works without Docker because generated types are committed.
+GitHub Actions installs with the frozen lockfile on Node 24/Linux, verifies formatting, generated schema/types, typechecks, and runs the complete Docker suite and verifies an independent consumer of the packed packages before removing that job's containers and volumes. Local editor typechecking works without Docker because generated types are committed.
 
 See [PLAN.md](PLAN.md) for architectural decisions and remaining expansion work, and [LOGIN_FLOW.md](LOGIN_FLOW.md) for the login contract.
 
 ## Billing
 
 The example includes a card-required SaaS trial, monthly/yearly plans, and a local Stripe simulator. See [BILLING.md](BILLING.md) for setup, entitlement rules, recovery and production configuration.
+
+## License
+
+[MIT](LICENSE), copyright 2026 DiffPlug.

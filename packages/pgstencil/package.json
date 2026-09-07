@@ -23,7 +23,8 @@
   },
   "files": [
     "dist",
-    "migrations"
+    "migrations",
+    "LICENSE"
   ],
   "publishConfig": {
     "exports": {
@@ -48,5 +49,16 @@
         "import": "./dist/postgres.js"
       }
     }
+  },
+  "description": "Postgres schema migrations, isolated test databases, and deterministic snapshot testing for TypeScript.",
+  "license": "MIT",
+  "homepage": "https://github.com/diffplug/pgstencil#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/diffplug/pgstencil.git",
+    "directory": "packages/pgstencil"
+  },
+  "bugs": {
+    "url": "https://github.com/diffplug/pgstencil/issues"
   }
 }

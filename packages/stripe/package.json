@@ -18,7 +18,8 @@
   },
   "files": [
     "dist",
-    "migrations"
+    "migrations",
+    "LICENSE"
   ],
   "publishConfig": {
     "exports": {
@@ -35,5 +36,16 @@
         "import": "./dist/migrations.js"
       }
     }
+  },
+  "description": "Stripe SaaS subscriptions, card-required trials, durable webhooks, and a local payment simulator for pgstencil.",
+  "license": "MIT",
+  "homepage": "https://github.com/diffplug/pgstencil#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/diffplug/pgstencil.git",
+    "directory": "packages/stripe"
+  },
+  "bugs": {
+    "url": "https://github.com/diffplug/pgstencil/issues"
   }
 }

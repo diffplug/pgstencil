@@ -24,7 +24,8 @@
   },
   "files": [
     "dist",
-    "migrations"
+    "migrations",
+    "LICENSE"
   ],
   "publishConfig": {
     "exports": {
@@ -65,5 +66,16 @@
         "import": "./dist/http.js"
       }
     }
+  },
+  "description": "Email-code, email-link, Google and GitHub authentication with deterministic tests for pgstencil.",
+  "license": "MIT",
+  "homepage": "https://github.com/diffplug/pgstencil#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/diffplug/pgstencil.git",
+    "directory": "packages/auth"
+  },
+  "bugs": {
+    "url": "https://github.com/diffplug/pgstencil/issues"
   }
 }

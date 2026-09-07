@@ -6,3 +6,5 @@ coverage/
 .DS_Store
 .env*
 !.env.example
+# Package copies are generated from the root license during build.
+packages/*/LICENSE

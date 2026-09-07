@@ -17,6 +17,10 @@ for (const name of ['pgstencil', 'auth', 'stripe']) {
   const destination = join(projectRoot, 'packages', name, 'dist');
   await rm(destination, { recursive: true, force: true });
   await mkdir(destination, { recursive: true });
+  await cp(
+    join(projectRoot, 'LICENSE'),
+    join(projectRoot, 'packages', name, 'LICENSE'),
+  );
   await cp(join(projectRoot, '.build', name, 'src'), destination, {
     recursive: true,
   });

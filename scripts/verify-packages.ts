@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cp, mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { projectRoot } from '../packages/pgstencil/src/paths.ts';
@@ -8,7 +8,14 @@ const directory = await mkdtemp(join(tmpdir(), 'pgstencil-packed-'));
 await mkdir(join(directory, 'vendor'));
 const dependencies: Record<string, string> = {};
 for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
-  const file = `${name.replace('@', '').replace('/', '-')}-0.1.0.tgz`;
+  const packageDirectory = name === 'pgstencil' ? name : name.split('/')[1]!;
+  const manifest = JSON.parse(
+    await readFile(
+      join(projectRoot, 'packages', packageDirectory, 'package.json'),
+      'utf8',
+    ),
+  ) as { version: string };
+  const file = `${name.replace('@', '').replace('/', '-')}-${manifest.version}.tgz`;
   await cp(
     join(projectRoot, 'dist/packages', file),
     join(directory, 'vendor', file),
@@ -42,6 +49,16 @@ import { Billing, type BillingDB } from '@pgstencil/stripe';
 import { billingMigrations } from '@pgstencil/stripe/migrations';
 import { createStripeDev } from '@pgstencil/stripe/testing';
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
+for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
+  const entry = import.meta.resolve(name);
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', entry), 'utf8'));
+  assert.equal(manifest.name, name);
+  assert.equal(manifest.license, 'MIT');
+  assert.equal(manifest.repository.url, 'git+https://github.com/diffplug/pgstencil.git');
+  assert.ok(readFileSync(new URL('../LICENSE', entry), 'utf8').startsWith('MIT License'));
+}
+assert.ok(readFileSync(new URL('compose.yaml', import.meta.resolve('pgstencil/database')), 'utf8').includes('integresql'));
 const lease = await allocateDatabase([authMigrations, billingMigrations]);
 const db = connectDatabase<AuthDB>(lease.url);
 const billingDb = connectDatabase<BillingDB>(lease.url);

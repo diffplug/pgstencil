@@ -11,7 +11,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,6 +26,7 @@ jobs:
       - run: pnpm db:verify
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm packages:verify
       - name: Remove this job's containers and volumes
         if: always()
         shell: bash

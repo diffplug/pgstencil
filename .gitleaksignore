@@ -1,0 +1,16 @@
+# Reviewed test fixtures only; exact historical fingerprints, not path exclusions.
+# Constants are local test secrets. Snapshots contain deterministic DevRandom
+# tokens/hashes and Stripe idempotency keys, never real provider credentials.
+# Recheck with: gitleaks git . --log-opts=--all --redact
+4dba3f80029348c475c8a03e7ee7e1458811d5b5:tests/integration/helpers.ts:generic-api-key:17
+4dba3f80029348c475c8a03e7ee7e1458811d5b5:tests/integration/snapshots/code/database.json:generic-api-key:8
+4dba3f80029348c475c8a03e7ee7e1458811d5b5:tests/integration/snapshots/code/email.md:generic-api-key:15
+4dba3f80029348c475c8a03e7ee7e1458811d5b5:tests/integration/snapshots/code/email.md:generic-api-key:37
+55b3a17780fa687a770cfd2e39ee13b32565a816:tests/integration/helpers.ts:generic-api-key:13
+79f7c943eb0c0ffde7838538f9a4bb0a869b5589:tests/integration/billing-http.test.ts:generic-api-key:25
+79f7c943eb0c0ffde7838538f9a4bb0a869b5589:tests/integration/snapshots/billing/stripe-requests.json:generic-api-key:29
+79f7c943eb0c0ffde7838538f9a4bb0a869b5589:tests/integration/snapshots/billing/stripe-requests.json:generic-api-key:7
+c05a6f40c9c75b9a403bd119f46b794f1ffdca55:tests/integration/snapshots/oauth/github/database.json:generic-api-key:16
+c05a6f40c9c75b9a403bd119f46b794f1ffdca55:tests/integration/snapshots/oauth/github/start-http.json:generic-api-key:8
+c05a6f40c9c75b9a403bd119f46b794f1ffdca55:tests/integration/snapshots/oauth/google/database.json:generic-api-key:16
+c05a6f40c9c75b9a403bd119f46b794f1ffdca55:tests/integration/snapshots/oauth/google/start-http.json:generic-api-key:8

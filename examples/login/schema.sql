@@ -144,7 +144,7 @@ CREATE TABLE public.oauth_flows (
     expires_at timestamp with time zone NOT NULL,
     consumed_at timestamp with time zone,
     CONSTRAINT oauth_flows_check CHECK (((link_user_id IS NULL) = (link_session_hash IS NULL))),
-    CONSTRAINT oauth_flows_provider_check CHECK ((provider = ANY (ARRAY['google'::text, 'github'::text])))
+    CONSTRAINT oauth_flows_provider_check CHECK ((provider = ANY (ARRAY['google'::text, 'github'::text, 'apple'::text, 'facebook'::text])))
 );
 
 
@@ -157,7 +157,17 @@ CREATE TABLE public.oauth_identities (
     subject text NOT NULL,
     user_id text NOT NULL,
     created_at timestamp with time zone NOT NULL,
-    CONSTRAINT oauth_identities_provider_check CHECK ((provider = ANY (ARRAY['google'::text, 'github'::text])))
+    CONSTRAINT oauth_identities_provider_check CHECK ((provider = ANY (ARRAY['google'::text, 'github'::text, 'apple'::text, 'facebook'::text])))
+);
+
+
+--
+-- Name: oauth_locks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.oauth_locks (
+    id integer NOT NULL,
+    CONSTRAINT oauth_locks_id_check CHECK (((id >= 0) AND (id < 64)))
 );
 
 
@@ -332,6 +342,14 @@ ALTER TABLE ONLY public.oauth_identities
 
 ALTER TABLE ONLY public.oauth_identities
     ADD CONSTRAINT oauth_identities_user_id_provider_key UNIQUE (user_id, provider);
+
+
+--
+-- Name: oauth_locks oauth_locks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.oauth_locks
+    ADD CONSTRAINT oauth_locks_pkey PRIMARY KEY (id);
 
 
 --

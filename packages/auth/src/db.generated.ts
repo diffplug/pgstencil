@@ -53,6 +53,10 @@ export interface OauthIdentities {
   user_id: string;
 }
 
+export interface OauthLocks {
+  id: number;
+}
+
 export interface RateLimits {
   count: number;
   key: string;
@@ -79,6 +83,7 @@ export interface DB {
   login_flows: LoginFlows;
   oauth_flows: OauthFlows;
   oauth_identities: OauthIdentities;
+  oauth_locks: OauthLocks;
   rate_limits: RateLimits;
   sessions: Sessions;
   users: Users;

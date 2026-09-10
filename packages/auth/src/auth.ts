@@ -101,11 +101,18 @@ export class Auth {
     for (const { key, limit } of [...keys].sort((a, b) =>
       a.key.localeCompare(b.key),
     )) {
-      await sql`select pg_advisory_xact_lock(hashtext(${key}))`.execute(trx);
+      // Inserting first also serializes the very first use of a key. Unlike
+      // advisory locks, row locks work through Hyperdrive transaction pooling.
+      await trx
+        .insertInto('rate_limits')
+        .values({ key, count: 0, window_start: now })
+        .onConflict((c) => c.column('key').doNothing())
+        .execute();
       const previous = await trx
         .selectFrom('rate_limits')
         .selectAll()
         .where('key', '=', key)
+        .forUpdate()
         .executeTakeFirst();
       const fresh =
         !previous ||

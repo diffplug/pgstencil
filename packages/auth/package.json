@@ -12,12 +12,17 @@
     "./oauth-providers": "./src/oauth-providers.ts",
     "./db.generated": "./src/db.generated.ts",
     "./email": "./src/email.ts",
-    "./http": "./src/http.ts"
+    "./http": "./src/http.ts",
+    "./fetch": "./src/fetch.ts",
+    "./hono": "./src/hono.ts",
+    "./workers": "./src/workers.ts",
+    "./postmark": "./src/postmark.ts"
   },
   "dependencies": {
-    "pgstencil": "workspace:*",
+    "hono": "^4.13.7",
     "kysely": "0.29.5",
-    "openid-client": "6.8.8"
+    "openid-client": "6.8.8",
+    "pgstencil": "workspace:*"
   },
   "engines": {
     "node": ">=24"
@@ -64,10 +69,26 @@
       "./http": {
         "types": "./dist/http.d.ts",
         "import": "./dist/http.js"
+      },
+      "./fetch": {
+        "types": "./dist/fetch.d.ts",
+        "import": "./dist/fetch.js"
+      },
+      "./hono": {
+        "types": "./dist/hono.d.ts",
+        "import": "./dist/hono.js"
+      },
+      "./workers": {
+        "types": "./dist/workers.d.ts",
+        "import": "./dist/workers.js"
+      },
+      "./postmark": {
+        "types": "./dist/postmark.d.ts",
+        "import": "./dist/postmark.js"
       }
     }
   },
-  "description": "Email-code, email-link, Google and GitHub authentication with deterministic tests for pgstencil.",
+  "description": "Email, Google, Apple, Facebook and GitHub authentication for Node, Hono and Cloudflare Workers.",
   "license": "MIT",
   "homepage": "https://github.com/diffplug/pgstencil#readme",
   "repository": {

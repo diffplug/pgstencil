@@ -1,0 +1,11 @@
+{
+  "name": "@pgstencil/example-workers",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@pgstencil/auth": "workspace:*"
+  },
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist"
+  }
+}

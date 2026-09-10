@@ -1,3 +1,4 @@
+import { appleCallbackLocation } from '@pgstencil/auth/fetch';
 import {
   createServer,
   type IncomingMessage,
@@ -297,6 +298,36 @@ export async function startApp(config: AppConfig) {
           'Sign-in method unavailable.',
           '<a href="/login">Return to sign-in</a>',
         );
+        return;
+      }
+      if (
+        req.method === 'POST' &&
+        provider === 'apple' &&
+        action === 'callback'
+      ) {
+        if (
+          req.headers['content-type']?.split(';')[0]?.trim() !==
+          'application/x-www-form-urlencoded'
+        ) {
+          res.writeHead(415).end();
+          return;
+        }
+        const body = await readBody(req, MAX_BODY_BYTES);
+        if (!body) {
+          res.writeHead(413).end();
+          return;
+        }
+        const location = appleCallbackLocation(
+          new URLSearchParams(body.toString()),
+          url.pathname,
+        );
+        res
+          .writeHead(303, {
+            location,
+            'cache-control': 'no-store',
+            'referrer-policy': 'no-referrer',
+          })
+          .end();
         return;
       }
       if (req.method === 'GET' && provider && action === 'callback') {

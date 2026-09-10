@@ -3,7 +3,10 @@ import {
   OAuthProviders,
   type OAuthProof,
 } from '../../examples/login/src/oauth-providers.ts';
-import { mockOAuthServer, oauthCredentials } from '../support/oauth-server.ts';
+import {
+  mockOAuthServer,
+  allOAuthCredentials,
+} from '../support/oauth-server.ts';
 
 const proof: OAuthProof = {
   state: 'state-from-browser',
@@ -23,7 +26,7 @@ const providerTest = test.extend<{ server: Mock; clients: OAuthProviders }>({
     }
   },
   clients: async ({ server }, use) =>
-    use(new OAuthProviders(oauthCredentials, server.transport)),
+    use(new OAuthProviders(allOAuthCredentials, server.transport)),
 });
 providerTest.for(['google', 'github'] as const)(
   '%s exchanges a code using PKCE and returns a verified stable identity',
@@ -119,3 +122,77 @@ providerTest('a discovery outage is retryable', async ({ server, clients }) => {
     (await clients.authorizationUrl('google', proof, false)).hostname,
   ).toBe('accounts.google.com');
 });
+
+providerTest.for(['apple', 'facebook'] as const)(
+  '%s exchanges a browser-bound code without claiming unsupported PKCE',
+  async (provider, { server, clients }) => {
+    const url = await clients.authorizationUrl(provider, proof, false);
+    expect(url.searchParams.get('state')).toBe(proof.state);
+    expect(url.searchParams.has('code_challenge')).toBe(false);
+    if (provider === 'apple') {
+      expect(url.searchParams.get('nonce')).toBe(proof.nonce);
+      expect(url.searchParams.get('response_mode')).toBe('form_post');
+    }
+    expect(
+      await clients.identity(provider, server.authorize(provider, url), proof),
+    ).toEqual({
+      subject: provider === 'apple' ? 'apple-person-1' : '12345',
+      email: 'oauth@example.test',
+    });
+  },
+);
+providerTest.for([
+  { badSignature: true },
+  { claims: { iss: 'https://attacker.example' } },
+  { claims: { aud: 'other-client' } },
+  { claims: { nonce: 'other-nonce' } },
+  { claims: { exp: 0 } },
+  { missingIdToken: true },
+  { verified: false },
+  { claims: { email_verified: 'false' } },
+])(
+  'Apple rejects invalid identity proof: %j',
+  async (options, { server, clients }) => {
+    const url = await clients.authorizationUrl('apple', proof, false);
+    await expect(
+      clients.identity('apple', server.authorize('apple', url, options), proof),
+    ).rejects.toThrow();
+  },
+);
+providerTest(
+  'Apple accepts a verified private relay email with a string verification claim',
+  async ({ server, clients }) => {
+    const url = await clients.authorizationUrl('apple', proof, false);
+    expect(
+      await clients.identity(
+        'apple',
+        server.authorize('apple', url, {
+          email: 'private@privaterelay.appleid.com',
+          claims: { email_verified: 'true' },
+        }),
+        proof,
+      ),
+    ).toEqual({
+      subject: 'apple-person-1',
+      email: 'private@privaterelay.appleid.com',
+    });
+  },
+);
+providerTest.for([
+  { email: '' },
+  { subject: 'invalid' },
+  { profileFailure: true },
+  { tokenFailure: true },
+])(
+  'Facebook fails closed on missing identity or upstream failure: %j',
+  async (options, { server, clients }) => {
+    const url = await clients.authorizationUrl('facebook', proof, false);
+    await expect(
+      clients.identity(
+        'facebook',
+        server.authorize('facebook', url, options),
+        proof,
+      ),
+    ).rejects.toThrow();
+  },
+);

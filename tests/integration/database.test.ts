@@ -32,8 +32,14 @@ test('shared SQL sources upgrade independently while each history stays append-o
     lease.url,
     "INSERT INTO users VALUES ('u', 'upgrade@example.test', '2020-01-01'); INSERT INTO profiles VALUES ('u', 'preserved')",
   );
+  const next =
+    Math.max(
+      ...(await readMigrations(shared)).map((file) =>
+        Number(file.name.split('_')[0]),
+      ),
+    ) + 1;
   await writeFile(
-    join(shared, '003_auth_display.sql'),
+    join(shared, `${String(next).padStart(3, '0')}_auth_display.sql`),
     '-- Up Migration\nALTER TABLE users ADD COLUMN display_name text;\n-- Down Migration\nALTER TABLE users DROP COLUMN display_name;',
   );
   await migrate(lease.url, await readMigrations(sources));

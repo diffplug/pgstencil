@@ -16,7 +16,10 @@ import {
 import { connectDatabase } from '../../packages/pgstencil/src/postgres.ts';
 import { createTestContext } from '../../packages/pgstencil/src/testing.ts';
 import { cookies, codeFrom } from './helpers.ts';
-import { mockOAuthServer, oauthCredentials } from '../support/oauth-server.ts';
+import {
+  mockOAuthServer,
+  allOAuthCredentials,
+} from '../support/oauth-server.ts';
 
 async function fixture() {
   const context = await createTestContext();
@@ -38,7 +41,7 @@ async function fixture() {
     auth,
     oauth: new OAuth(
       auth,
-      new OAuthProviders(oauthCredentials, provider.transport),
+      new OAuthProviders(allOAuthCredentials, provider.transport),
     ),
     secure: false,
   });
@@ -160,9 +163,9 @@ httpTest(
 );
 
 httpTest(
-  'JSON OAuth start and native callback preserve browser binding for Google and GitHub',
+  'JSON OAuth start and native callback preserve browser binding for all providers',
   async ({ f }) => {
-    for (const provider of ['google', 'github'] as const) {
+    for (const provider of ['google', 'github', 'apple', 'facebook'] as const) {
       const state = await request(f.origin)
         .get('/api/auth/session')
         .expect(200);
@@ -176,6 +179,17 @@ httpTest(
           email: `${provider}@example.test`,
         },
       );
+      if (provider === 'apple') {
+        const relay = await request(f.origin)
+          .post(callback.pathname)
+          .type('form')
+          .send(callback.searchParams.toString())
+          .expect(303);
+        expect(relay.headers.location).toBe(
+          callback.pathname + callback.search,
+        );
+        expect(relay.headers['set-cookie']).toBeUndefined();
+      }
       const unbound = await request(f.origin)
         .get(callback.pathname + callback.search)
         .expect(303);

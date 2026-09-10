@@ -1,22 +1,31 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, createHmac, generateKeyPairSync, sign } from 'node:crypto';
 import type {
   OAuthFetch,
   Provider,
   OAuthSettings,
 } from '../../examples/login/src/oauth-providers.ts';
 
-export const oauthCredentials = {
+export const allOAuthCredentials = {
   google: {
     clientId: 'test-google-client',
     clientSecret: 'test-google-secret',
+  },
+  apple: { clientId: 'test-apple-client', clientSecret: 'test-apple-secret' },
+  facebook: {
+    clientId: 'test-facebook-client',
+    clientSecret: 'test-facebook-secret',
   },
   github: {
     clientId: 'test-github-client',
     clientSecret: 'test-github-secret',
   },
 } satisfies OAuthSettings;
+export const oauthCredentials = {
+  google: allOAuthCredentials.google,
+  github: allOAuthCredentials.github,
+};
 const key = generateKeyPairSync('rsa', { modulusLength: 2048 });
 // Only the badSignature grant needs a second key; generating it is ~40ms.
 let wrongKey: typeof key | undefined;
@@ -28,7 +37,13 @@ const jwk = {
   use: 'sig',
   alg: 'RS256',
 };
-const endpointPaths: Record<string, string> = {
+export const endpointPaths: Record<string, string> = {
+  'https://appleid.apple.com/.well-known/openid-configuration':
+    '/apple/discovery',
+  'https://appleid.apple.com/auth/token': '/apple/token',
+  'https://appleid.apple.com/auth/keys': '/keys',
+  'https://graph.facebook.com/oauth/access_token': '/facebook/token',
+  'https://graph.facebook.com/me': '/facebook/user',
   'https://accounts.google.com/.well-known/openid-configuration': '/discovery',
   'https://oauth2.googleapis.com/token': '/google/token',
   'https://www.googleapis.com/oauth2/v3/certs': '/keys',
@@ -74,19 +89,27 @@ export async function mockOAuthServer() {
         res.writeHead(status, { 'content-type': 'application/json' });
         res.end(JSON.stringify(value));
       };
-      if (url.pathname === '/discovery') {
+      if (url.pathname.endsWith('/discovery')) {
         if (discoveryFailure) return json({ error: 'unavailable' }, 503);
+        const apple = url.pathname.startsWith('/apple');
         return json({
-          issuer: 'https://accounts.google.com',
-          authorization_endpoint:
-            'https://accounts.google.com/o/oauth2/v2/auth',
-          token_endpoint: 'https://oauth2.googleapis.com/token',
-          jwks_uri: 'https://www.googleapis.com/oauth2/v3/certs',
+          issuer: apple
+            ? 'https://appleid.apple.com'
+            : 'https://accounts.google.com',
+          authorization_endpoint: apple
+            ? 'https://appleid.apple.com/auth/authorize'
+            : 'https://accounts.google.com/o/oauth2/v2/auth',
+          token_endpoint: apple
+            ? 'https://appleid.apple.com/auth/token'
+            : 'https://oauth2.googleapis.com/token',
+          jwks_uri: apple
+            ? 'https://appleid.apple.com/auth/keys'
+            : 'https://www.googleapis.com/oauth2/v3/certs',
           response_types_supported: ['code'],
           subject_types_supported: ['public'],
           id_token_signing_alg_values_supported: ['RS256'],
           token_endpoint_auth_methods_supported: ['client_secret_post'],
-          code_challenge_methods_supported: ['S256'],
+          ...(apple ? {} : { code_challenge_methods_supported: ['S256'] }),
         });
       }
       if (url.pathname === '/keys') return json({ keys: [jwk] });
@@ -96,7 +119,7 @@ export async function mockOAuthServer() {
         const grant = grants.get(code);
         grants.delete(code);
         if (!grant) return json({ error: 'invalid_grant' }, 400);
-        const credentials = oauthCredentials[grant.provider];
+        const credentials = allOAuthCredentials[grant.provider];
         const challenge = createHash('sha256')
           .update(form.get('code_verifier') ?? '')
           .digest('base64url');
@@ -108,8 +131,10 @@ export async function mockOAuthServer() {
           form.get('client_secret') !== credentials.clientSecret ||
           form.get('redirect_uri') !==
             grant.authorization.searchParams.get('redirect_uri') ||
-          challenge !==
-            grant.authorization.searchParams.get('code_challenge') ||
+          (grant.provider === 'google' || grant.provider === 'github'
+            ? challenge !==
+              grant.authorization.searchParams.get('code_challenge')
+            : form.has('code_verifier')) ||
           grant.options.tokenFailure
         )
           return json(
@@ -129,12 +154,18 @@ export async function mockOAuthServer() {
               ? 'openid email'
               : 'read:user,user:email',
         };
-        if (grant.provider === 'google' && !grant.options.missingIdToken) {
+        if (
+          (grant.provider === 'google' || grant.provider === 'apple') &&
+          !grant.options.missingIdToken
+        ) {
           const now = Math.floor(Date.now() / 1000); // Upstream protocol clock, independent of application DevTime.
           const claims = {
-            iss: 'https://accounts.google.com',
+            iss:
+              grant.provider === 'apple'
+                ? 'https://appleid.apple.com'
+                : 'https://accounts.google.com',
             aud: credentials.clientId,
-            sub: grant.options.subject ?? 'google-person-1',
+            sub: grant.options.subject ?? `${grant.provider}-person-1`,
             email: grant.options.email ?? 'oauth@example.test',
             email_verified: grant.options.verified ?? true,
             nonce: grant.authorization.searchParams.get('nonce'),
@@ -155,6 +186,25 @@ export async function mockOAuthServer() {
       const accessToken =
         req.headers.authorization?.replace(/^Bearer /i, '') ?? '';
       const grant = accessTokens.get(accessToken);
+      if (grant?.provider === 'facebook' && url.pathname === '/facebook/user') {
+        const expected = createHmac(
+          'sha256',
+          allOAuthCredentials.facebook.clientSecret,
+        )
+          .update(accessToken)
+          .digest('hex');
+        if (
+          url.searchParams.get('appsecret_proof') !== expected ||
+          url.searchParams.get('fields') !== 'id,email'
+        )
+          return json({ error: 'invalid_proof' }, 400);
+        if (grant.options.profileFailure)
+          return json({ error: 'unavailable' }, 503);
+        return json({
+          id: grant.options.subject ?? '12345',
+          email: grant.options.email ?? 'oauth@example.test',
+        });
+      }
       if (!grant || grant.provider !== 'github')
         return json({ error: 'unauthorized' }, 401);
       if (grant.options.profileFailure)
@@ -219,6 +269,7 @@ export async function mockOAuthServer() {
   };
   return {
     transport,
+    origin,
     requests,
     failDiscovery(value: boolean) {
       discoveryFailure = value;

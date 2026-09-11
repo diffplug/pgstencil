@@ -6,6 +6,7 @@ export function createDeterministicApp(
   options: Parameters<typeof createEmailApp>[0] & {
     time: Time;
     random: RandomSource;
+    outboundFetch?: typeof fetch;
   },
 ) {
   const app = deterministicScope.run(options, () => createEmailApp(options));

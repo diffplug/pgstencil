@@ -5,8 +5,12 @@ import type { Time, RandomSource } from 'pgstencil';
 export const deterministicScope = new AsyncLocalStorage<{
   time: Time;
   random: RandomSource;
+  outboundFetch?: typeof fetch;
 }>();
 const native = globalThis;
+const nativeFetch = native.fetch;
+const scopedFetch: typeof fetch = (...args) =>
+  (deterministicScope.getStore()?.outboundFetch ?? nativeFetch)(...args);
 const NativeDate = native.Date;
 const nativeCrypto = native.crypto;
 const now = () =>
@@ -63,6 +67,8 @@ const scopedCrypto = new Proxy(nativeCrypto, {
   },
 });
 export {
+  scopedFetch as fetch,
+  scopedFetch as 'globalThis.fetch',
   ScopedDate as Date,
   scopedCrypto as crypto,
   ScopedDate as 'globalThis.Date',

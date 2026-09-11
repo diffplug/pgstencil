@@ -44,6 +44,8 @@ export const endpointPaths: Record<string, string> = {
   'https://appleid.apple.com/auth/keys': '/keys',
   'https://graph.facebook.com/oauth/access_token': '/facebook/token',
   'https://graph.facebook.com/me': '/facebook/user',
+  'https://graph.facebook.com/debug_token': '/facebook/debug',
+  'https://graph.facebook.com/v24.0/oauth/access_token': '/facebook/token',
   'https://accounts.google.com/.well-known/openid-configuration': '/discovery',
   'https://oauth2.googleapis.com/token': '/google/token',
   'https://www.googleapis.com/oauth2/v3/certs': '/keys',
@@ -69,7 +71,9 @@ interface Grant {
 }
 
 /** Real local HTTP endpoints, with test-only signing keys and dummy OAuth clients. */
-export async function mockOAuthServer() {
+export async function mockOAuthServer(
+  settings: { betterAuth?: boolean; now?: () => Date } = {},
+) {
   const grants = new Map<string, Grant>();
   const accessTokens = new Map<string, Grant>();
   const requests: {
@@ -131,10 +135,14 @@ export async function mockOAuthServer() {
           form.get('client_secret') !== credentials.clientSecret ||
           form.get('redirect_uri') !==
             grant.authorization.searchParams.get('redirect_uri') ||
-          (grant.provider === 'google' || grant.provider === 'github'
-            ? challenge !==
-              grant.authorization.searchParams.get('code_challenge')
-            : form.has('code_verifier')) ||
+          (settings.betterAuth
+            ? grant.authorization.searchParams.has('code_challenge') &&
+              challenge !==
+                grant.authorization.searchParams.get('code_challenge')
+            : grant.provider === 'google' || grant.provider === 'github'
+              ? challenge !==
+                grant.authorization.searchParams.get('code_challenge')
+              : form.has('code_verifier')) ||
           grant.options.tokenFailure
         )
           return json(
@@ -158,7 +166,9 @@ export async function mockOAuthServer() {
           (grant.provider === 'google' || grant.provider === 'apple') &&
           !grant.options.missingIdToken
         ) {
-          const now = Math.floor(Date.now() / 1000); // Upstream protocol clock, independent of application DevTime.
+          const now = Math.floor(
+            (settings.now?.().getTime() ?? Date.now()) / 1000,
+          ); // Upstream protocol clock, independent of application DevTime.
           const claims = {
             iss:
               grant.provider === 'apple'
@@ -183,6 +193,23 @@ export async function mockOAuthServer() {
         }
         return json(response);
       }
+      if (url.pathname === '/facebook/debug') {
+        const grant = accessTokens.get(
+          url.searchParams.get('input_token') ?? '',
+        );
+        const credentials = allOAuthCredentials.facebook;
+        const valid =
+          !!grant &&
+          url.searchParams.get('access_token') ===
+            `${credentials.clientId}|${credentials.clientSecret}`;
+        return json({
+          data: {
+            is_valid: valid,
+            app_id: credentials.clientId,
+            user_id: grant?.options.subject ?? '12345',
+          },
+        });
+      }
       const accessToken =
         req.headers.authorization?.replace(/^Bearer /i, '') ?? '';
       const grant = accessTokens.get(accessToken);
@@ -194,14 +221,21 @@ export async function mockOAuthServer() {
           .update(accessToken)
           .digest('hex');
         if (
-          url.searchParams.get('appsecret_proof') !== expected ||
-          url.searchParams.get('fields') !== 'id,email'
+          !settings.betterAuth &&
+          (url.searchParams.get('appsecret_proof') !== expected ||
+            url.searchParams.get('fields') !== 'id,email')
         )
           return json({ error: 'invalid_proof' }, 400);
         if (grant.options.profileFailure)
           return json({ error: 'unavailable' }, 503);
         return json({
           id: grant.options.subject ?? '12345',
+          ...(settings.betterAuth
+            ? {
+                name: 'Mock Facebook',
+                picture: { data: { url: 'https://example.test/avatar' } },
+              }
+            : {}),
           email: grant.options.email ?? 'oauth@example.test',
         });
       }

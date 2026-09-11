@@ -4,6 +4,7 @@ import { allocateDatabase } from 'pgstencil/database';
 import { createEmailApp } from './auth.ts';
 import { listen } from './node.ts';
 import { html } from 'hono/html';
+import { oauthFromEnvironment } from './oauth.ts';
 
 // A disposable lease keeps this experiment separate from the existing dev database.
 const database = await allocateDatabase(
@@ -48,6 +49,9 @@ const server = await listen(
 app = createEmailApp({
   databaseUrl: database.url,
   email,
+  oauth: oauthFromEnvironment(process.env),
+  sessionPolicy:
+    process.env.SESSION_POLICY === 'single' ? 'single' : 'multiple',
   origin: server.origin,
   secret: 'better-auth-local-development-secret-only',
 });

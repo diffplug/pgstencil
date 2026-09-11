@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "node --env-file-if-exists=.env --import tsx examples/login/src/dev.ts",
     "dev:better-auth": "node --import tsx examples/better-auth/src/dev.ts",
-    "test:better-auth": "vitest run tests/integration/better-auth.test.ts tests/integration/better-auth-workers.test.ts",
+    "test:better-auth": "vitest run tests/integration/better-auth.test.ts tests/integration/better-auth-workers.test.ts tests/integration/better-auth-oauth.test.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",

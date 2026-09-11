@@ -10,6 +10,12 @@ import {
 import { createTestContext } from '../../packages/pgstencil/src/testing.ts';
 import type { EmailMessage } from '../../packages/pgstencil/src/email.ts';
 import { queryDatabase } from '../../packages/pgstencil/src/postgres.ts';
+import {
+  mockOAuthServer,
+  endpointPaths,
+  allOAuthCredentials,
+} from '../support/oauth-server.ts';
+import { providers } from '../../examples/better-auth/src/oauth.ts';
 
 const origin = 'https://better-auth.example.test';
 const bundles = [false, true].map((deterministic) =>
@@ -38,10 +44,13 @@ const bundles = [false, true].map((deterministic) =>
   }),
 );
 
-async function fixture(deterministic = true) {
+async function fixture(deterministic = true, oauth = false) {
   const context = await createTestContext({
     migrations: resolve('examples/better-auth/migrations'),
   });
+  const provider = oauth
+    ? await mockOAuthServer({ betterAuth: true, now: () => context.time.now() })
+    : undefined;
   const bundle = await bundles[deterministic ? 1 : 0]!;
   const worker = new Miniflare(
     convertV4MiniflareOptions({
@@ -52,9 +61,44 @@ async function fixture(deterministic = true) {
       bindings: {
         APP_ORIGIN: origin,
         AUTH_SECRET: 'better-auth-local-test-secret-32-characters',
+        ...(oauth
+          ? Object.fromEntries(
+              Object.entries(allOAuthCredentials).flatMap(([key, value]) => [
+                [key.toUpperCase() + '_CLIENT_ID', value.clientId],
+                [key.toUpperCase() + '_CLIENT_SECRET', value.clientSecret],
+              ]),
+            )
+          : {}),
       },
       hyperdrives: { HYPERDRIVE: context.database.url },
       serviceBindings: {
+        ...(provider
+          ? {
+              OAUTH_TEST: async (request: Request) => {
+                const url = new URL(request.url);
+                const path = endpointPaths[url.origin + url.pathname];
+                if (!path) throw new Error('Unexpected OAuth test destination');
+                const response = await fetch(
+                  provider.origin + path + url.search,
+                  {
+                    method: request.method,
+                    headers: request.headers,
+                    ...(request.method === 'GET'
+                      ? {}
+                      : { body: await request.arrayBuffer() }),
+                  },
+                );
+                const headers: Record<string, string> = {};
+                response.headers.forEach((value, key) => {
+                  headers[key] = value;
+                });
+                return new WorkerResponse(await response.arrayBuffer(), {
+                  status: response.status,
+                  headers,
+                });
+              },
+            }
+          : {}),
         EMAIL: async (request) => {
           await context.email.send((await request.json()) as EmailMessage);
           return new WorkerResponse('ok');
@@ -84,6 +128,7 @@ async function fixture(deterministic = true) {
   return {
     ...context,
     worker,
+    provider,
     csrf,
     csrfCookie,
     post,
@@ -103,6 +148,7 @@ async function fixture(deterministic = true) {
       }),
     async close() {
       await worker.dispose();
+      await provider?.close();
       await context.close();
     },
   };
@@ -216,3 +262,35 @@ test('normal Workers build uses real time and randomness and contains no test cl
   expect((await f.post('sign-out', {}, second.cookie)).status).toBe(200);
   expect(await f.get(second.cookie)).toBeNull();
 });
+
+for (const provider of providers)
+  test(`Better Auth OAuth in workerd: ${provider}`, async ({
+    onTestFinished,
+  }) => {
+    const f = await fixture(true, true);
+    onTestFinished(() => f.close());
+    const started = await f.post('sign-in/social', { provider });
+    expect(started.status, await started.clone().text()).toBe(200);
+    const authorization = new URL(
+      ((await started.json()) as { url: string }).url,
+    );
+    const stateCookie = started.headers
+      .getSetCookie()
+      .map((v) => v.split(';')[0])
+      .join('; ');
+    const callback = f.provider!.authorize(provider, authorization);
+    const complete = await f.worker.dispatchFetch(callback.href, {
+      headers: { cookie: stateCookie },
+      redirect: 'manual',
+    });
+    expect(
+      complete.headers.get('location'),
+      await complete.clone().text(),
+    ).toBe(origin + '/');
+    const cookie = complete.headers
+      .getSetCookie()
+      .filter((v) => v.includes('.session_token='))
+      .map((v) => v.split(';')[0])
+      .join('; ');
+    expect((await f.get(cookie))?.user.email).toBe('oauth@example.test');
+  });

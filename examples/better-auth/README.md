@@ -1,89 +1,102 @@
-# Better Auth email experiment
+# Better Auth with pgstencil
 
-Better Auth 1.7.3 owns email OTP login, sessions, cookies and database rate limits.
-pgstencil still owns versioned SQL, Docker/IntegreSQL clones, EmailDev and snapshots.
-This is an isolated experiment; TTR and the existing auth package are unchanged.
+Better Auth 1.7.3 handles email-code login and Google, Apple, Facebook and GitHub
+OAuth. pgstencil owns SQL migrations, Docker/IntegreSQL clones, email capture,
+security policy and deterministic tests. This example is isolated from the old
+auth implementation and from TTR production.
 
-With Docker running, use `pnpm dev:better-auth` from the repository root and open
-`http://127.0.0.1:8082`. Enter any test email; read the eight-digit code at
-`/dev/emails`, then sign in. This demo uses real time and randomness. `PORT=0`
-chooses a free port. Each run leases a disposable database, so it does not touch
-the original example's development database. Stop it with Ctrl-C.
+With Docker running:
 
-`pnpm test:better-auth` runs the Node and workerd experiments. Tests start
-independent HTTP servers and databases. The normal Workers entry uses an EMAIL
-service binding for delivery and creates/closes its database pool per request.
-No real email provider, Cloudflare credentials or hosted database is needed.
+```sh
+pnpm dev:better-auth
+pnpm test:better-auth
+```
 
-The test build injects `tests/support/scoped-globals.ts` using esbuild. Its Date
-and Web Crypto facades use AsyncLocalStorage to choose each application's
-DevTime and DevRandom. It does not replace process globals, timers, cryptographic
-hashing or signing. Normal builds do not inject it. This is a build adapter,
-not a Better Auth fork or a public Better Auth clock API. Dependency upgrades
-must pass the behavioral tests again, especially byte-for-byte snapshot replay.
-
-The initial tests prove repeatable email codes, session IDs/tokens, cookie
-signatures and database timestamps across concurrent applications, plus independent
-historical clocks and real timers. Better Auth checks `expiresAt < now`: the
-server accepts an explicitly replayed cookie at exactly 24 hours and rejects it
-one millisecond later. Session refresh and cookie caching are disabled here.
-OTP lifetime is ten minutes, with three attempts and hashed storage.
-
-SQL was generated through Better Auth's migration API against an empty clone,
-then committed for pgstencil to apply. Runtime code never runs migrations.
-Origin/CSRF checks are explicitly enabled even under `NODE_ENV=test`.
-Rate limits use Postgres because Worker instances cannot share process memory.
-Workers trust Cloudflare's `CF-Connecting-IP`; the local Node listener derives
-the address from the socket and overwrites the internal IP header.
-
-The workerd tests also prove identical sessions and cookies across independent
-isolates, time travel without expiring another app, and rate limits surviving
-per-request auth instances. A separate build without injection proves real
-timestamps, fresh session randomness, logout and absence of test controls.
-
-## Result and remaining work
-
-Email auth and deterministic testing work without changing Better Auth's source.
-The application switches from a combined code/link challenge to Better Auth's
-email-code flow. Cookies use Max-Age rather than an explicit Expires timestamp;
-tests replay historical cookies explicitly so the browser clock is irrelevant.
-
-The deterministic adapter is currently test infrastructure, not a published
-pgstencil API. It intercepts Date and Web Crypto in the bundled dependency graph;
-future code that uses other time/random APIs needs new coverage. Replaying the
-same request order is deterministic; competing requests within one app are not
-promised a deterministic scheduling order. Hashing, signing and network timers
-remain real. Keep the dependency pinned and verify snapshots when upgrading.
-
-Next: decide whether the one-millisecond expiry boundary matters, then adopt the
-email integration in TTR and exercise its candidate deployment through real
-Hyperdrive/Neon/Postmark. Local workerd tests do not validate Cloudflare's hosted
-pooler. OAuth, linking policy, TTR migration and legacy-service deletion are
-outside this experiment.
+Open `http://127.0.0.1:8082`, enter any test email and read its eight-digit code at
+`/dev/emails`. Development uses real time/randomness and a disposable database.
+`PORT=0` chooses a free port. Stop with Ctrl-C. OAuth buttons appear only for
+configured providers; set paired `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`,
+`APPLE_CLIENT_ID`/`APPLE_CLIENT_SECRET`, `FACEBOOK_CLIENT_ID`/`FACEBOOK_CLIENT_SECRET`
+and/or `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` in the process environment.
 
 ## Security policy
 
-Email codes deliberately work across browsers. Each browser obtains its own
-`GET /api/auth/csrf` token and sends it in `X-CSRF-Token` on same-origin JSON
-POSTs. The matching HttpOnly cookie is signed. HTTPS cookies use `__Host-` names.
-The API permits only the operations implemented by this example. Browser API
-responses omit upstream session tokens; pages and API responses are not cacheable.
-Scripts are external so CSP does not need `unsafe-inline`.
+- Codes work across browsers, last ten minutes, allow three failed guesses and
+  use purpose-separated HMAC-SHA256 storage with the application secret.
+- Atomic Postgres counters enforce a one-minute per-email resend cooldown,
+  five sends and fifteen verification submissions per email per fifteen minutes,
+  plus IP budgets and Better Auth's stricter short-window IP limits. Counter
+  keys contain keyed hashes rather than raw emails/IPs; expired counters are pruned.
+- Each browser obtains `GET /api/auth/csrf`, then supplies `X-CSRF-Token` on
+  same-origin JSON POSTs. The matching HttpOnly cookie is signed. HTTPS cookies
+  use `__Host-` names, Secure, HttpOnly, Path=/ and SameSite=Lax.
+- Only the implemented API operations are exposed. Responses omit upstream
+  session tokens, use no-store, and have security headers. CSP permits the local
+  external script; it does not require unsafe-inline.
+- `sessionPolicy: 'single'` signs out all other devices on successful login (TTR).
+  `'multiple'` is the default and retains independent sessions (Dormouse).
+  A Postgres trigger serializes session creation per user. Logout revokes the
+  current session. Sessions last 24 hours with refresh and cookie caching disabled.
+- Better Auth stores native session tokens in the database. A token alone cannot
+  authenticate: the cookie also needs the server signature, and no bearer plugin
+  is enabled. Browser JSON omits these tokens. This is an explicit upstream storage
+  tradeoff; the test suite proves a bare database token is rejected.
+- OAuth identities never merge just because their email addresses match. Sign in
+  by email or an existing provider, then explicitly connect another provider.
+  Connecting requires a session less than ten minutes old, and the callback must
+  still carry that same live session. Different verified provider emails are allowed,
+  including Apple's private relay address. An identity cannot belong to two users.
+- Callbacks check provider, signed browser state, expiry and an atomic Postgres
+  replay claim. Apple form_post relays to a GET that receives the Lax cookies.
+  Callback destinations are fixed to the application origin. Direct provider-token
+  sign-in and unused upstream auth endpoints are unavailable.
+- The pinned version's Google/Apple redirect profile readers only decode ID tokens.
+  `verifiedOidc` explicitly enables Better Auth's signature/issuer/audience/expiry/
+  nonce verification through its plugin API. Negative tests cover each check.
+  GitHub requires a verified primary email; Facebook uses the authenticated email
+  after Better Auth validates that the access token belongs to our app and user.
+- Provider access, refresh and ID tokens are discarded after identity verification.
+  They are not kept in the database or returned to the browser.
 
-OTP storage uses purpose-separated HMAC-SHA256 with the application secret.
-Atomic Postgres counters add a one-minute per-email resend cooldown, five sends
-per fifteen minutes, and fifteen verification submissions per fifteen minutes,
-on top of Better Auth's IP limits and three-attempt code budget. Counter keys
-contain keyed email hashes rather than email addresses.
+## Determinism and Workers
 
-`sessionPolicy: 'single'` signs out all other devices on successful login (TTR).
-`'multiple'` is the default and retains independent device sessions (Dormouse).
-A Postgres trigger locks the user row and replaces sessions within the inserting
-transaction, so concurrent Workers cannot leave two active single-policy sessions.
-Logout revokes the current session.
+Test bundles inject `tests/support/scoped-globals.ts` with esbuild. Date, Web Crypto
+and outbound fetch facades use AsyncLocalStorage to select each app's clock,
+random stream and local provider server. They do not replace process globals,
+cryptographic hashing/signing or timers. Normal builds have no injection or test
+clock routes. Repeatable email/OAuth cookies, sessions and timestamps are tested
+across parallel apps; all four providers also run through real workerd.
 
-Better Auth's native database still contains session tokens. Browser authentication
-requires the server-signed cookie, and the test suite checks that a database token
-alone cannot authenticate. We deliberately retain the upstream session storage
-model instead of adding a custom adapter; no bearer-token plugin is enabled.
-The deterministic adapter remains exclusively in test builds.
+This adapter covers these APIs in the bundled dependency graph. Dependency
+upgrades must rerun security and snapshot tests. The same request order is
+repeatable; concurrent requests within one app need not have deterministic order.
+Better Auth accepts a replayed session cookie at exactly 24 hours and rejects it
+one millisecond later. Tests explicitly replay historical cookies independently
+of the browser clock.
+
+SQL is generated for review and committed, never migrated during requests.
+Background runtime schema inspection is disabled because it races request-scoped
+Worker pool teardown. Tests verify the committed schema against Better Auth's
+migration plan. The Worker uses a Hyperdrive binding and an EMAIL service binding;
+tests replace EMAIL with in-memory capture. Hosted Hyperdrive/Neon and real provider
+configuration still need the first candidate-deployment smoke test.
+
+## First production smoke test
+
+Register these callback URLs with each enabled provider, using the candidate's
+stable public origin:
+
+| Provider | Callback                                      |
+| -------- | --------------------------------------------- |
+| Google   | `https://<origin>/api/auth/callback/google`   |
+| Apple    | `https://<origin>/api/auth/callback/apple`    |
+| Facebook | `https://<origin>/api/auth/callback/facebook` |
+| GitHub   | `https://<origin>/api/auth/callback/github`   |
+
+Existing Supabase client IDs/secrets can be reused when the provider configuration
+allows the new callback. Apple uses a Services ID and an unexpired client-secret
+JWT; its private relay also requires the mail sender to be registered with Apple.
+Enter secrets directly into deployment tooling, not chat, source files or logs.
+Do not delete Supabase/Pages until email and each required provider pass in a real
+browser. The TTR test must also confirm that a second device's login signs out
+the first, and that explicit linking works without creating a duplicate account.

@@ -8,7 +8,12 @@ const context = {
   random: new DevRandom('better-auth-worker'),
 };
 export default {
-  async fetch(request: Request, env: Bindings) {
+  async fetch(
+    request: Request,
+    env: Bindings & {
+      OAUTH_TEST?: { fetch(request: Request): Promise<Response> };
+    },
+  ) {
     if (
       new URL(request.url).pathname === '/__test/time' &&
       request.method === 'POST'
@@ -16,6 +21,17 @@ export default {
       context.time.set(await request.text());
       return new Response('ok');
     }
-    return deterministicScope.run(context, () => worker.fetch(request, env));
+    return deterministicScope.run(
+      {
+        ...context,
+        ...(env.OAUTH_TEST
+          ? {
+              outboundFetch: (input: RequestInfo | URL, init?: RequestInit) =>
+                env.OAUTH_TEST!.fetch(new Request(input, init)),
+            }
+          : {}),
+      },
+      () => worker.fetch(request, env),
+    );
   },
 };

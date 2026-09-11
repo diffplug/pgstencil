@@ -11,7 +11,7 @@ export function keyed(secret: string, purpose: string, value: string) {
     .update(value)
     .digest('hex');
 }
-function equal(a: string, b: string) {
+export function equal(a: string, b: string) {
   const left = Buffer.from(a),
     right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
@@ -52,6 +52,7 @@ export function protectAuth(
     origin: string;
     secret: string;
     database: ReturnType<typeof connectDatabase>;
+    ipAddressHeaders?: string[];
   },
 ) {
   const secure = options.origin.startsWith('https:');
@@ -143,6 +144,23 @@ export function protectAuth(
       const send = path === '/email-otp/send-verification-otp';
       if (send && body.type !== 'sign-in')
         return c.json({ message: 'Unsupported email operation' }, 400);
+      const ip =
+        (options.ipAddressHeaders ?? ['x-pgstencil-client-ip'])
+          .map((name) => c.req.header(name))
+          .find(Boolean) ?? 'unknown';
+      // Bound per-email counter creation even after upstream IP limits reject.
+      if (
+        !(await consume(
+          options.database,
+          `${send ? 'send' : 'verify'}:ip:${keyed(options.secret, 'ip-rate', ip)}`,
+          send ? 30 : 100,
+          15 * 60_000,
+        ))
+      )
+        return c.json({ message: 'Please wait before trying again.' }, 429);
+      await sql`DELETE FROM pgstencil_auth_limits WHERE started_at < ${new Date(Date.now() - 15 * 60_000)}`.execute(
+        options.database,
+      );
       const key = keyed(options.secret, 'email-rate', email);
       const allowed =
         (!send ||
@@ -167,7 +185,10 @@ export function protectAuth(
 
 /** The browser only needs public session data, never upstream session tokens. */
 export async function publicAuthResponse(response: Response) {
-  if (!response.headers.get('content-type')?.includes('application/json'))
+  if (
+    (response.status >= 300 && response.status < 400) ||
+    !response.headers.get('content-type')?.includes('application/json')
+  )
     return response;
   const body: unknown = await response.json();
   const scrub = (value: unknown): unknown => {

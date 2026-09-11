@@ -49,6 +49,8 @@ const auth = createBetterAuthWorker<Env>({
   appName: 'Type The Rhythm',
   sessionPolicy: 'single', // Dormouse uses 'multiple'.
   accountLinking: 'same-email', // Default: 'explicit'.
+  trustedEmailProviders: ['google', 'apple', 'facebook'], // Skip the extra mailbox code.
+  allowMissingEmail: true, // Optional: provider-only accounts have public email: null.
   successPath: '/profile',
   errorPath: '/login',
   email: (env) => postmarkEmail(env.POSTMARK_SERVER_TOKEN, env.EMAIL_FROM),
@@ -87,11 +89,14 @@ and makes POST `/api/auth/link-social` return 404, including for signed-in users
 Google always requests its account chooser. Existing provider bindings remain
 stable if a provider later changes its email; policy changes do not unlink them.
 
-For a new identity in `same-email` mode, Apple and Google Gmail/Workspace can
+By default, for a new identity in `same-email` mode, Apple and Google Gmail/Workspace can
 establish mailbox ownership. Google third-party addresses, Facebook and GitHub
 require a live email-OTP session for the same address, less than ten minutes old.
 OAuth-only sessions cannot supply this proof. Unverified/missing provider email
-still fails closed. Case-insensitive matching does not collapse aliases or relay
+still fails closed. `trustedEmailProviders` skips the extra email-OTP proof for the
+listed providers. It trusts their verified email assertions (including Facebook’s
+authenticated profile email) for both signup and automatic same-email linking.
+Case-insensitive matching does not collapse aliases or relay
 addresses. Apple Hide My Email therefore creates a separate account.
 
 The fallback callback redirects to `errorPath` with
@@ -102,3 +107,15 @@ to Profile merely because this intermediate email login created a session. On
 success, the native provider binding makes future OAuth logins code-free. Allow
 cancelling the continuation to use ordinary email login instead. The server checks
 the proof; query parameters grant no authority and contain no email or tokens.
+
+With `allowMissingEmail: true`, a verified provider identity can sign up without
+an email. Better Auth requires a non-null email column, so pgstencil uses an
+unverified, provider/client/subject-specific address at `identity.pgstencil.invalid`.
+HTTP session responses expose that address as `email: null`; email-code routes
+and the email sender reject that namespace. Never use internal Better Auth user
+emails as delivery addresses without checking them. No SQL migration is needed.
+Existing bindings retain their account and canonical email if provider email
+permission disappears. Provider-only accounts stay provider-only even if the
+provider later supplies an email; adopting an address or merging existing accounts
+requires a separate account-recovery flow. Without a common email or an existing
+binding, different providers cannot be matched automatically.

@@ -15,7 +15,10 @@ import {
   verifiedOidc,
   oauthRequest,
   type OAuthSettings,
+  type Provider,
 } from './better-auth-oauth.ts';
+
+import { identityEmail, isIdentityEmail } from './better-auth-email.ts';
 
 export interface AuthOptions {
   database: ReturnType<typeof connectDatabase>;
@@ -25,6 +28,10 @@ export interface AuthOptions {
   ipAddressHeaders?: string[];
   sessionPolicy?: 'single' | 'multiple';
   accountLinking?: 'explicit' | 'same-email';
+  /** Accept these providers' verified email assertions without a local email code. */
+  trustedEmailProviders?: Provider[];
+  /** Permit provider-only accounts; their public session email is null. */
+  allowMissingEmail?: boolean;
   oauth?: OAuthSettings;
   appName?: string;
   successPath?: string;
@@ -57,10 +64,28 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
     database: { db: options.database, type: 'postgres', transaction: true },
     telemetry: { enabled: false },
     logger: { disabled: true },
-    socialProviders: socialProviders(options.oauth),
+    socialProviders: socialProviders(options.oauth, options.allowMissingEmail),
     onAPIError: { errorURL: options.origin + (options.errorPath ?? '/') },
     user: {
       validateUserInfo: async ({ user, source }, context) => {
+        if (typeof user.email === 'string' && isIdentityEmail(user.email)) {
+          const provider = source.oauth?.providerId as Provider;
+          const profile = source.oauth?.profile;
+          if (
+            options.allowMissingEmail &&
+            source.method === 'oauth' &&
+            options.oauth?.[provider] &&
+            user.emailVerified === false &&
+            user.email ===
+              identityEmail(
+                provider,
+                options.oauth[provider].clientId,
+                profile?.sub ?? profile?.id,
+              )
+          )
+            return;
+          return { error: 'Reserved email address' };
+        }
         if (
           source.method === 'oauth' &&
           (user.emailVerified !== true ||
@@ -76,6 +101,9 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
           const email = user.email?.toLowerCase() ?? '';
           const profile = source.oauth?.profile;
           const authoritative =
+            options.trustedEmailProviders?.includes(
+              source.oauth?.providerId as Provider,
+            ) ||
             source.oauth?.providerId === 'apple' ||
             (source.oauth?.providerId === 'google' &&
               (email.endsWith('@gmail.com') ||
@@ -196,6 +224,7 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
           hash: async (otp) => keyed(options.secret, 'email-otp', otp),
         },
         async sendVerificationOTP({ email, otp, type }) {
+          if (isIdentityEmail(email)) throw new Error('Not a delivery address');
           if (type !== 'sign-in')
             throw new Error('This example only supports sign-in email');
           await options.email.send({

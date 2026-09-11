@@ -46,7 +46,8 @@ and/or `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` in the process environment.
   Connecting requires a session less than ten minutes old, and the callback must
   still carry that same live session. Different verified provider emails are allowed,
   including Apple's private relay address. An identity cannot belong to two users.
-  Consumers can choose automatic `same-email` linking with an email-code fallback;
+  Consumers can choose automatic `same-email` linking and trust selected providers’
+  emails without an extra code; the conservative default keeps an email-code fallback;
   see [the policy and continuation protocol](../../PACKAGES.md#account-linking-policies).
 - Callbacks check provider, signed browser state, expiry and an atomic Postgres
   replay claim. Apple form_post relays to a GET that receives the Lax cookies.
@@ -57,6 +58,9 @@ and/or `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` in the process environment.
   nonce verification through its plugin API. Negative tests cover each check.
   GitHub requires a verified primary email; Facebook uses the authenticated email
   after Better Auth validates that the access token belongs to our app and user.
+- `allowMissingEmail` optionally permits provider-only accounts. Public sessions
+  expose `email: null`; the reserved internal address cannot receive login codes.
+  See [package policy options](../../PACKAGES.md#better-auth-integration) for matching and recovery limits.
 - Provider access, refresh and ID tokens are discarded after identity verification.
   They are not kept in the database or returned to the browser.
 

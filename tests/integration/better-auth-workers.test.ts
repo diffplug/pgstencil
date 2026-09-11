@@ -241,15 +241,19 @@ test('normal Workers build uses real time and randomness and contains no test cl
 }) => {
   const f = await fixture(false);
   onTestFinished(() => f.close());
+  const before = Date.now();
   const first = await login(f);
+  const after = Date.now();
   const session = await f.get(first.cookie);
-  expect(
-    Math.abs(Date.parse(session!.session.createdAt) - Date.now()),
-  ).toBeLessThan(10_000);
-  expect(
-    Date.parse(session!.session.expiresAt) -
-      Date.parse(session!.session.createdAt),
-  ).toBe(86_400_000);
+  // Better Auth reads the real clock separately for creation and expiration.
+  // Both timestamps must fall inside the request window, offset by the TTL.
+  for (const [timestamp, offset] of [
+    [session!.session.createdAt, 0],
+    [session!.session.expiresAt, 86_400_000],
+  ] as const) {
+    expect(Date.parse(timestamp) - offset).toBeGreaterThanOrEqual(before);
+    expect(Date.parse(timestamp) - offset).toBeLessThanOrEqual(after);
+  }
   const second = await login(f, 'second@example.test');
   expect(first.cookie).not.toBe(second.cookie);
   expect((await f.setTime('2020-01-01')).status).toBe(404);

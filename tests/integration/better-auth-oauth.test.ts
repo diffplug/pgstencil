@@ -12,6 +12,8 @@ import {
   allOAuthCredentials,
   type GrantOptions,
 } from '../support/oauth-server.ts';
+import type { AuthOptions } from '../../packages/auth/src/better-auth.ts';
+import { identityEmail } from '../../packages/auth/src/better-auth-email.ts';
 import type { createDeterministicApp } from '../support/better-auth-entry.ts';
 import {
   providers,
@@ -42,6 +44,10 @@ const built = (async () => {
 async function fixture(
   policy: 'single' | 'multiple' = 'multiple',
   accountLinking: 'explicit' | 'same-email' = 'explicit',
+  emailPolicy: Pick<
+    AuthOptions,
+    'trustedEmailProviders' | 'allowMissingEmail'
+  > = {},
 ) {
   const context = await createTestContext({
     migrations: resolve('packages/auth/better-auth-migrations'),
@@ -68,6 +74,7 @@ async function fixture(
     secret: 'better-auth-local-oauth-secret-32-characters',
     sessionPolicy: policy,
     accountLinking,
+    ...emailPolicy,
     oauth: allOAuthCredentials,
     outboundFetch,
   });
@@ -153,7 +160,7 @@ async function login(
 }
 async function session(browser: Browser) {
   return (await (await browser.get('/api/auth/get-session')).json()) as {
-    user: { id: string; email: string };
+    user: { id: string; email: string | null };
     session: { id: string };
   } | null;
 }
@@ -498,6 +505,171 @@ async function emailLogin(f: Fixture, browser: Browser, email: string) {
   );
   return (await session(browser))!.user.id;
 }
+
+for (const oauthFirst of [false, true])
+  test(`Trusted Facebook email: ${oauthFirst ? 'OAuth then email' : 'email then OAuth'} shares an account without an extra code`, async ({
+    onTestFinished,
+  }) => {
+    const f = await fixture('single', 'same-email', {
+      trustedEmailProviders: ['facebook', 'google'],
+    });
+    onTestFinished(() => f.close());
+    const email = 'player@example.test';
+    const emailBrowser = await f.browser(),
+      facebook = await f.browser();
+    let id: string;
+    if (oauthFirst) {
+      expect(
+        (await login(f, facebook, 'facebook', { email })).response.headers.get(
+          'location',
+        ),
+      ).toBe(origin + '/');
+      id = (await session(facebook))!.user.id;
+      expect(await emailLogin(f, emailBrowser, email)).toBe(id);
+      expect(await session(facebook)).toBeNull();
+    } else {
+      id = await emailLogin(f, emailBrowser, email);
+      expect(
+        (await login(f, facebook, 'facebook', { email })).response.headers.get(
+          'location',
+        ),
+      ).toBe(origin + '/');
+      expect((await session(facebook))!.user.id).toBe(id);
+      expect(await session(emailBrowser)).toBeNull();
+    }
+    // A third method can join directly, including a Google account with a third-party email.
+    const google = await f.browser();
+    expect(
+      (await login(f, google, 'google', { email })).response.headers.get(
+        'location',
+      ),
+    ).toBe(origin + '/');
+    expect((await session(google))!.user.id).toBe(id);
+    expect(await session(facebook)).toBeNull();
+    expect(await session(emailBrowser)).toBeNull();
+    expect(
+      await queryDatabase(f.database.url, 'SELECT id FROM "user"'),
+    ).toEqual([{ id }]);
+  });
+
+for (const provider of providers)
+  test(`Optional email: ${provider} signs in by stable identity without a mailbox`, async ({
+    onTestFinished,
+  }) => {
+    const f = await fixture('single', 'same-email', {
+      allowMissingEmail: true,
+      trustedEmailProviders: [...providers],
+    });
+    onTestFinished(() => f.close());
+    const first = await f.browser(),
+      second = await f.browser();
+    expect(
+      (
+        await login(f, first, provider, { email: '', githubEmails: [] })
+      ).response.headers.get('location'),
+    ).toBe(origin + '/');
+    const user = (await session(first))!.user;
+    expect(user.email).toBeNull();
+    expect(
+      (
+        await login(f, second, provider, { email: '', githubEmails: [] })
+      ).response.headers.get('location'),
+    ).toBe(origin + '/');
+    expect((await session(second))!.user).toMatchObject(user);
+    expect(await session(first)).toBeNull();
+    const other = await f.browser();
+    await login(f, other, provider, {
+      subject: '987654321',
+      email: '',
+      githubEmails: [],
+    });
+    expect((await session(other))!.user.id).not.toBe(user.id);
+    expect((await session(second))!.user.id).toBe(user.id);
+    const rows = await queryDatabase(
+      f.database.url,
+      'SELECT email, "emailVerified" FROM "user"',
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.emailVerified === false)).toBe(true);
+    const internalEmail = String(rows[0]!.email);
+    for (const path of ['email-otp/send-verification-otp', 'sign-in/email-otp'])
+      expect(
+        (
+          await other.post(path, {
+            email: internalEmail,
+            type: 'sign-in',
+            otp: '12345678',
+          })
+        ).status,
+      ).toBe(400);
+    // A provider must not supply somebody else's internal address as its email.
+    const attacker = await f.browser();
+    expect(
+      (
+        await login(f, attacker, 'facebook', {
+          subject: 'attacker',
+          email: internalEmail,
+        })
+      ).response.headers.get('location'),
+    ).toContain('error=oauth_failed');
+    expect(await session(attacker)).toBeNull();
+    expect(f.email.all()).toEqual([]);
+    // A returning subject owns its original account, even when a newly supplied
+    // email belongs to another existing account. Never silently move purchases.
+    const emailOwner = await f.browser();
+    const emailId = await emailLogin(f, emailOwner, 'later@example.test');
+    await login(f, second, provider, { email: 'later@example.test' });
+    expect((await session(second))!.user).toMatchObject(user);
+    expect((await session(emailOwner))!.user.id).toBe(emailId);
+    expect(emailId).not.toBe(user.id);
+  });
+
+test('Optional email: losing email permission preserves an existing account and its real email', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture('single', 'same-email', {
+    allowMissingEmail: true,
+    trustedEmailProviders: ['facebook'],
+  });
+  onTestFinished(() => f.close());
+  const first = await f.browser(),
+    returning = await f.browser();
+  await login(f, first, 'facebook');
+  const user = (await session(first))!.user;
+  await login(f, returning, 'facebook', { email: '' });
+  expect((await session(returning))!.user).toEqual(user);
+  expect(await session(first)).toBeNull();
+});
+
+test('Optional email never accepts a supplied but unverified email or invalid OIDC identity', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture('single', 'same-email', {
+    allowMissingEmail: true,
+    trustedEmailProviders: [...providers],
+  });
+  onTestFinished(() => f.close());
+  for (const options of [
+    { verified: false },
+    { email: '', badSignature: true },
+    { email: '', claims: { nonce: 'wrong' } },
+    {
+      email: identityEmail(
+        'google',
+        allOAuthCredentials.google!.clientId,
+        'google-subject',
+      ),
+    },
+  ]) {
+    const browser = await f.browser();
+    expect(
+      (await login(f, browser, 'google', options)).response.headers.get(
+        'location',
+      ),
+    ).toContain('error=oauth_failed');
+    expect(await session(browser)).toBeNull();
+  }
+});
 
 for (const oauthFirst of [false, true])
   test(`Same-email linking: ${oauthFirst ? 'Google then email' : 'email then Google'} shares one account and revokes the old session`, async ({

@@ -1026,5 +1026,14 @@ test('auth diagnostics identify Microsoft token failures without recording crede
       expect.objectContaining({ event: 'email.delivery.succeeded' }),
     ]),
   );
+  const before = records.length;
+  const rejected = await next.post('sign-in/email-otp', {
+    email: 'private-email@example.test',
+    otp: '00000000',
+  });
+  expect(rejected.status).toBeGreaterThanOrEqual(400);
+  const rejectionLogs = records.slice(before);
+  expect(rejectionLogs.some((r) => r.event === 'auth.rejected')).toBe(true);
+  expect(rejectionLogs.some((r) => r.event === 'request.failed')).toBe(false);
   expect(JSON.stringify(records)).not.toContain('private-email');
 });

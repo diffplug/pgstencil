@@ -1,5 +1,6 @@
 import { betterAuth, type BetterAuthOptions } from 'better-auth';
 import { getSessionFromCtx } from 'better-auth/api';
+import { lastLoginMethod } from 'better-auth/plugins';
 import { emailOTP } from 'better-auth/plugins/email-otp';
 import { Hono } from 'hono';
 import { sql } from 'kysely';
@@ -32,6 +33,8 @@ export interface AuthOptions {
   trustedEmailProviders?: Provider[];
   /** Permit provider-only accounts; their public session email is null. */
   allowMissingEmail?: boolean;
+  /** Remember the last successful method in a readable, non-authenticating 30-day cookie. */
+  rememberLoginMethod?: boolean;
   oauth?: OAuthSettings;
   appName?: string;
   successPath?: string;
@@ -216,6 +219,20 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
     },
     plugins: [
       verifiedOidc,
+      ...(options.rememberLoginMethod
+        ? [
+            lastLoginMethod({
+              cookieName: secure
+                ? '__Host-pgstencil.last_login_method'
+                : 'pgstencil.last_login_method',
+              storeInDatabase: false,
+              customResolveMethod: (context) =>
+                context.path === '/sign-in/email-otp' ? 'email' : null,
+              // Do not record failed callbacks, cookie clearing, or explicit linking.
+              beforeStoreCookie: (context) => !!context.context.newSession,
+            }),
+          ]
+        : []),
       emailOTP({
         otpLength: 8,
         expiresIn: 600,

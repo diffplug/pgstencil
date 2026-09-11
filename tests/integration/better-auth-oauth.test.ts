@@ -46,7 +46,7 @@ async function fixture(
   accountLinking: 'explicit' | 'same-email' = 'explicit',
   emailPolicy: Pick<
     AuthOptions,
-    'trustedEmailProviders' | 'allowMissingEmail'
+    'trustedEmailProviders' | 'allowMissingEmail' | 'rememberLoginMethod'
   > = {},
 ) {
   const context = await createTestContext({
@@ -796,4 +796,46 @@ test('Same-email linking: wrong-email, OAuth-only, expired and revoked sessions 
   expect(
     await queryDatabase(f.database.url, 'SELECT "providerId" FROM account'),
   ).toEqual([{ providerId: 'apple' }]);
+});
+
+test('Last login method remembers only successful sign-ins and survives logout', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture('multiple', 'same-email', {
+    rememberLoginMethod: true,
+  });
+  onTestFinished(() => f.close());
+  const browser = await f.browser();
+  const cookieName = '__Host-pgstencil.last_login_method';
+  expect(browser.jar.get(cookieName)).toBeUndefined();
+  await start(browser, 'apple');
+  expect(browser.jar.get(cookieName)).toBeUndefined();
+  await login(f, browser, 'apple', { badSignature: true });
+  expect(browser.jar.get(cookieName)).toBeUndefined();
+  const result = await login(f, browser, 'apple');
+  expect(browser.jar.get(cookieName)).toBe('apple');
+  const hint = result.response.headers
+    .getSetCookie()
+    .find((value) => value.startsWith(cookieName + '='))!;
+  expect(hint).toContain('Max-Age=2592000');
+  expect(hint).toContain('Secure');
+  expect(hint).toContain('SameSite=Lax');
+  expect(hint).not.toContain('HttpOnly');
+  await browser.post('sign-out', {});
+  expect(await session(browser)).toBeNull();
+  expect(browser.jar.get(cookieName)).toBe('apple');
+  await browser.post('sign-in/email-otp', {
+    email: 'hint@example.test',
+    otp: '00000000',
+  });
+  expect(browser.jar.get(cookieName)).toBe('apple');
+  await emailLogin(f, browser, 'hint@example.test');
+  expect(browser.jar.get(cookieName)).toBe('email');
+  f.time.advanceMilliseconds(11_000);
+  await login(f, browser, 'google', { badSignature: true });
+  expect(browser.jar.get(cookieName)).toBe('email');
+  // Remembering another browser's method never authenticates this browser.
+  const other = await f.browser();
+  other.jar.set(cookieName, 'apple');
+  expect(await session(other)).toBeNull();
 });

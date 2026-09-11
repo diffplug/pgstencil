@@ -33,6 +33,8 @@ export const verifiedOidc: BetterAuthPlugin = {
         if (!data.idTokenNonce) throw new Error('Missing OIDC nonce');
         const url = await authorization(data);
         url.searchParams.set('nonce', data.idTokenNonce);
+        if (provider.id === 'google')
+          url.searchParams.set('prompt', 'select_account');
         return url;
       };
       const info = provider.getUserInfo.bind(provider);
@@ -157,6 +159,7 @@ export async function oauthRequest(
     origin: string;
     secret: string;
     oauth?: OAuthSettings;
+    accountLinking?: 'explicit' | 'same-email';
     successPath?: string;
     errorPath?: string;
   },
@@ -247,6 +250,7 @@ export async function oauthRequest(
       return fail();
     }
     if (data.pgstencilProvider !== provider) return fail();
+    if (data.link && options.accountLinking === 'same-email') return fail();
     if (data.link) {
       const session = await auth.api.getSession({ headers: request.headers });
       if (
@@ -272,6 +276,15 @@ export async function oauthRequest(
   const location = response.headers.get('location');
   if (path.startsWith('/callback/') && location) {
     const redirect = new URL(location, options.origin);
+    if (
+      options.accountLinking === 'same-email' &&
+      redirect.searchParams.get('error') === 'email_verification_required'
+    ) {
+      const url = new URL(options.errorPath ?? '/', options.origin);
+      url.searchParams.set('error', 'email_verification_required');
+      url.searchParams.set('provider', path.slice('/callback/'.length));
+      return Response.redirect(url.href, 303);
+    }
     if (redirect.searchParams.has('error')) return fail();
   }
   return response;

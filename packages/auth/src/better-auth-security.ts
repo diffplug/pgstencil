@@ -53,6 +53,7 @@ export function protectAuth(
     secret: string;
     database: ReturnType<typeof connectDatabase>;
     ipAddressHeaders?: string[];
+    accountLinking?: 'explicit' | 'same-email';
   },
 ) {
   const secure = options.origin.startsWith('https:');
@@ -91,6 +92,8 @@ export function protectAuth(
   });
   app.use('/api/auth/*', async (c, next) => {
     const path = c.req.path.slice('/api/auth'.length);
+    if (path === '/link-social' && options.accountLinking === 'same-email')
+      return c.json({ message: 'Not found' }, 404);
     const callback = /^\/callback\/(google|github|apple|facebook)$/.test(path);
     const reads = ['/get-session', '/list-accounts'];
     const writes = [
@@ -205,6 +208,7 @@ export async function publicAuthResponse(response: Response) {
               'refreshToken',
               'idToken',
               'singleSession',
+              'emailAuthenticated',
             ].includes(key),
         )
         .map(([key, item]) => [key, scrub(item)]),

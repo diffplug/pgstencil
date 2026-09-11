@@ -22,7 +22,7 @@ export type BetterAuthWorkerBindings = {
 export function createBetterAuthWorker<E extends BetterAuthWorkerBindings>(
   options: Pick<
     AuthAppOptions,
-    'sessionPolicy' | 'appName' | 'successPath' | 'errorPath'
+    'sessionPolicy' | 'accountLinking' | 'appName' | 'successPath' | 'errorPath'
   > & {
     email: (env: E) => EmailSender;
   },

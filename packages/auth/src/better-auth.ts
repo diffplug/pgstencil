@@ -1,6 +1,8 @@
 import { betterAuth, type BetterAuthOptions } from 'better-auth';
+import { getSessionFromCtx } from 'better-auth/api';
 import { emailOTP } from 'better-auth/plugins/email-otp';
 import { Hono } from 'hono';
+import { sql } from 'kysely';
 import { connectDatabase } from 'pgstencil/postgres';
 import type { EmailSender } from 'pgstencil';
 import {
@@ -22,6 +24,7 @@ export interface AuthOptions {
   email: EmailSender;
   ipAddressHeaders?: string[];
   sessionPolicy?: 'single' | 'multiple';
+  accountLinking?: 'explicit' | 'same-email';
   oauth?: OAuthSettings;
   appName?: string;
   successPath?: string;
@@ -57,7 +60,7 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
     socialProviders: socialProviders(options.oauth),
     onAPIError: { errorURL: options.origin + (options.errorPath ?? '/') },
     user: {
-      validateUserInfo: async ({ user, source }) => {
+      validateUserInfo: async ({ user, source }, context) => {
         if (
           source.method === 'oauth' &&
           (user.emailVerified !== true ||
@@ -65,6 +68,35 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
             !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(user.email))
         )
           return { error: 'A verified email address is required' };
+        if (
+          options.accountLinking === 'same-email' &&
+          source.method === 'oauth' &&
+          source.action !== 'sign-in'
+        ) {
+          const email = user.email?.toLowerCase() ?? '';
+          const profile = source.oauth?.profile;
+          const authoritative =
+            source.oauth?.providerId === 'apple' ||
+            (source.oauth?.providerId === 'google' &&
+              (email.endsWith('@gmail.com') ||
+                (typeof profile?.hd === 'string' && profile.hd.length > 0)));
+          if (!authoritative) {
+            // An email OTP proves current ownership where the provider cannot.
+            // Only the still-live session created by that OTP can supply proof.
+            const proof = await getSessionFromCtx(context);
+            if (
+              !proof ||
+              proof.user.email.toLowerCase() !== email ||
+              Date.now() - proof.session.createdAt.getTime() >= 600_000 ||
+              !(
+                await sql`SELECT id FROM session WHERE id = ${proof.session.id} AND "emailAuthenticated" = true AND "expiresAt" > ${new Date()}`.execute(
+                  options.database,
+                )
+              ).rows.length
+            )
+              return { error: 'email_verification_required' };
+          }
+        }
       },
     },
     // Keep production security enabled under NODE_ENV=test as well.
@@ -90,6 +122,13 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
     rateLimit: { enabled: true, storage: 'database' },
     session: {
       additionalFields: {
+        emailAuthenticated: {
+          type: 'boolean',
+          required: true,
+          defaultValue: false,
+          input: false,
+          returned: false,
+        },
         singleSession: {
           type: 'boolean',
           required: true,
@@ -128,10 +167,11 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
       },
       session: {
         create: {
-          before: async (session) => ({
+          before: async (session, context) => ({
             data: {
               ...session,
               singleSession: options.sessionPolicy === 'single',
+              emailAuthenticated: context?.path === '/sign-in/email-otp',
             },
           }),
         },
@@ -142,8 +182,8 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
       storeAccountCookie: false,
       storeStateStrategy: 'database',
       accountLinking: {
-        disableImplicitLinking: true,
-        allowDifferentEmails: true,
+        disableImplicitLinking: options.accountLinking !== 'same-email',
+        allowDifferentEmails: options.accountLinking !== 'same-email',
       },
     },
     plugins: [

@@ -1,4 +1,4 @@
-import { fileURLToPath } from 'node:url';
+import { betterAuthMigrations } from '@pgstencil/auth/better-auth-migrations';
 import { EmailDev, SystemTime } from 'pgstencil';
 import { allocateDatabase } from 'pgstencil/database';
 import { createEmailApp } from './auth.ts';
@@ -7,9 +7,7 @@ import { html } from 'hono/html';
 import { oauthFromEnvironment } from './oauth.ts';
 
 // A disposable lease keeps this experiment separate from the existing dev database.
-const database = await allocateDatabase(
-  fileURLToPath(new URL('../migrations', import.meta.url)),
-);
+const database = await allocateDatabase(betterAuthMigrations);
 const email = new EmailDev(new SystemTime());
 let app: ReturnType<typeof createEmailApp> | undefined;
 const server = await listen(

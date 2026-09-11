@@ -17,7 +17,7 @@ import { listen } from '../../examples/better-auth/src/node.ts';
 import type { createDeterministicApp } from '../support/better-auth-entry.ts';
 
 const origin = 'https://better-auth.example.test';
-const migrations = resolve('examples/better-auth/migrations');
+const migrations = resolve('packages/auth/better-auth-migrations');
 const built = (async () => {
   const result = await build({
     entryPoints: ['tests/support/better-auth-entry.ts'],
@@ -31,7 +31,7 @@ const built = (async () => {
       ...builtinModules.map((name) => `node:${name}`),
       'pg-native',
     ],
-    inject: [resolve('tests/support/scoped-globals.ts')],
+    inject: [resolve('packages/auth/src/better-auth-testing.ts')],
     banner: {
       js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
     },

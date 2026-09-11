@@ -2,7 +2,7 @@ import worker, {
   type Bindings,
 } from '../../examples/better-auth/src/worker.ts';
 import { DevTime, DevRandom } from 'pgstencil';
-import { deterministicScope } from './scoped-globals.ts';
+import { deterministicScope } from '../../packages/auth/src/better-auth-testing.ts';
 const context = {
   time: new DevTime(),
   random: new DevRandom('better-auth-worker'),

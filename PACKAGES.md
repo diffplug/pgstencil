@@ -27,3 +27,53 @@ Auth reserves the existing `public.users`, `login_flows`, `login_challenges`, `s
 `Auth` accepts a `renderEmail` function for branding. `createAuthHttp` from `@pgstencil/auth/http` supplies JSON routes under `/api/auth/`, native OAuth callbacks under `/oauth/`, and a non-consuming email-link redirect under `/login/link`. The SPA confirms the link with an authenticated browser-flow POST. Session tokens stay in HttpOnly cookies; the JSON state contains the CSRF token, public session fields, and configured provider names. See the adopter's backend spec for a complete React integration.
 
 The project is MIT licensed and hosted at [diffplug/pgstencil](https://github.com/diffplug/pgstencil). Public npm namespace, registry credentials, trusted publishing and release automation remain deferred. These local archives are ordinary npm package artifacts, so that later switch does not require submodules or a source-loader integration.
+
+## Better Auth integration
+
+New applications can use `@pgstencil/auth/better-auth` and the request-scoped
+`@pgstencil/auth/better-auth-workers` adapter. The old exports remain available
+so adoption can be staged without changing already deployed auth code.
+
+```ts
+import {
+  createBetterAuthWorker,
+  type BetterAuthWorkerBindings,
+} from '@pgstencil/auth/better-auth-workers';
+import { postmarkEmail } from '@pgstencil/auth/postmark';
+
+type Env = BetterAuthWorkerBindings & {
+  POSTMARK_SERVER_TOKEN: string;
+  EMAIL_FROM: string;
+};
+const auth = createBetterAuthWorker<Env>({
+  appName: 'Type The Rhythm',
+  sessionPolicy: 'single', // Dormouse uses 'multiple'.
+  successPath: '/profile',
+  errorPath: '/login',
+  email: (env) => postmarkEmail(env.POSTMARK_SERVER_TOKEN, env.EMAIL_FROM),
+});
+```
+
+Supply an environment type extending `BetterAuthWorkerBindings` with the email
+bindings used by your application. Forward `/api/auth/*` and `/api/providers` to
+`auth.fetch(request, env, executionCtx)`. Bind `HYPERDRIVE`, `APP_ORIGIN`, and
+`AUTH_SECRET`; paired provider credentials enable OAuth. A consumer can strip
+provider bindings in its preview entry to guarantee email-only previews.
+
+Use `betterAuthMigrations` from `@pgstencil/auth/better-auth-migrations`. These
+reserve `public.user`, `session`, `account`, `verification`, `rateLimit`,
+`pgstencil_auth_limits`, and `pgstencil_oauth_claims`. An existing deployment
+retains its old migration source and adds this one; it must not drop checksum
+history. Old and new auth tables coexist, but sessions/accounts are independent.
+
+Node hosts use `createAuthApp({databaseUrl, origin, secret, email, ...})` and call
+`close()` before returning their database lease. Tests bundle their application
+with esbuild's `inject` set to the **actual module file** resolved from
+`@pgstencil/auth/better-auth-testing`. Injecting a re-export shim does not work.
+Use that module's `deterministicScope.run({time, random, outboundFetch}, action)`
+for app creation and requests. Never inject it into production builds.
+
+The [working example](examples/better-auth/README.md) documents the HTTP protocol,
+security choices, native session-token storage tradeoff, test coverage and
+provider callback registration. `packages:verify` also installs and exercises
+this integration from the tarball alongside the legacy auth and Stripe packages.

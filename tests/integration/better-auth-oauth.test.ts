@@ -27,7 +27,7 @@ const built = (async () => {
     platform: 'node',
     format: 'esm',
     external: [...builtinModules, 'node:*', 'pg-native'],
-    inject: [resolve('tests/support/scoped-globals.ts')],
+    inject: [resolve('packages/auth/src/better-auth-testing.ts')],
     banner: {
       js: "import {createRequire} from 'node:module'; const require = createRequire(import.meta.url);",
     },
@@ -41,7 +41,7 @@ const built = (async () => {
 })();
 async function fixture(policy: 'single' | 'multiple' = 'multiple') {
   const context = await createTestContext({
-    migrations: resolve('examples/better-auth/migrations'),
+    migrations: resolve('packages/auth/better-auth-migrations'),
     seed: 'better-auth-oauth',
   });
   const provider = await mockOAuthServer({

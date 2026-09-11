@@ -1,5 +1,5 @@
 import { createEmailApp } from '../../examples/better-auth/src/auth.ts';
-import { deterministicScope } from './scoped-globals.ts';
+import { deterministicScope } from '../../packages/auth/src/better-auth-testing.ts';
 import type { Time, RandomSource } from 'pgstencil';
 
 export function createDeterministicApp(

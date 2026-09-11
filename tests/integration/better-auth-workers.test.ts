@@ -37,7 +37,9 @@ const bundles = [false, true].map((deterministic) =>
         .filter((name) => !name.startsWith('node:'))
         .map((name) => [name, `node:${name}`]),
     ),
-    inject: deterministic ? [resolve('tests/support/scoped-globals.ts')] : [],
+    inject: deterministic
+      ? [resolve('packages/auth/src/better-auth-testing.ts')]
+      : [],
     banner: {
       js: "import { createRequire } from 'node:module'; const require = createRequire('/worker.js');",
     },
@@ -46,7 +48,7 @@ const bundles = [false, true].map((deterministic) =>
 
 async function fixture(deterministic = true, oauth = false) {
   const context = await createTestContext({
-    migrations: resolve('examples/better-auth/migrations'),
+    migrations: resolve('packages/auth/better-auth-migrations'),
   });
   const provider = oauth
     ? await mockOAuthServer({ betterAuth: true, now: () => context.time.now() })
@@ -256,6 +258,7 @@ test('normal Workers build uses real time and randomness and contains no test cl
     inputs.some(
       (path) =>
         path.includes('scoped-globals') ||
+        path.includes('better-auth-testing') ||
         path.includes('better-auth-worker.ts'),
     ),
   ).toBe(false);

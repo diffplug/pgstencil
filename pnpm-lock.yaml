@@ -53,6 +53,9 @@ importers:
       '@hono/node-server':
         specifier: 1.19.17
         version: 1.19.17(hono@4.13.7)
+      '@pgstencil/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       better-auth:
         specifier: 1.7.3
         version: 1.7.3(pg@8.23.0)(vitest@4.1.11(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))
@@ -95,6 +98,9 @@ importers:
 
   packages/auth:
     dependencies:
+      better-auth:
+        specifier: 1.7.3
+        version: 1.7.3(pg@8.23.0)(vitest@4.1.11(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))
       hono:
         specifier: ^4.13.7
         version: 4.13.7

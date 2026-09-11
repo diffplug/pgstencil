@@ -16,13 +16,19 @@
     "./fetch": "./src/fetch.ts",
     "./hono": "./src/hono.ts",
     "./workers": "./src/workers.ts",
-    "./postmark": "./src/postmark.ts"
+    "./postmark": "./src/postmark.ts",
+    "./better-auth": "./src/better-auth.ts",
+    "./better-auth-oauth": "./src/better-auth-oauth.ts",
+    "./better-auth-migrations": "./src/better-auth-migrations.ts",
+    "./better-auth-testing": "./src/better-auth-testing.ts",
+    "./better-auth-workers": "./src/better-auth-workers.ts"
   },
   "dependencies": {
     "hono": "^4.13.7",
     "kysely": "0.29.5",
     "openid-client": "6.8.8",
-    "pgstencil": "workspace:*"
+    "pgstencil": "workspace:*",
+    "better-auth": "1.7.3"
   },
   "engines": {
     "node": ">=24"
@@ -30,7 +36,8 @@
   "files": [
     "dist",
     "migrations",
-    "LICENSE"
+    "LICENSE",
+    "better-auth-migrations"
   ],
   "publishConfig": {
     "exports": {
@@ -85,6 +92,26 @@
       "./postmark": {
         "types": "./dist/postmark.d.ts",
         "import": "./dist/postmark.js"
+      },
+      "./better-auth": {
+        "types": "./dist/better-auth.d.ts",
+        "import": "./dist/better-auth.js"
+      },
+      "./better-auth-oauth": {
+        "types": "./dist/better-auth-oauth.d.ts",
+        "import": "./dist/better-auth-oauth.js"
+      },
+      "./better-auth-migrations": {
+        "types": "./dist/better-auth-migrations.d.ts",
+        "import": "./dist/better-auth-migrations.js"
+      },
+      "./better-auth-testing": {
+        "types": "./dist/better-auth-testing.d.ts",
+        "import": "./dist/better-auth-testing.js"
+      },
+      "./better-auth-workers": {
+        "types": "./dist/better-auth-workers.d.ts",
+        "import": "./dist/better-auth-workers.js"
       }
     }
   },

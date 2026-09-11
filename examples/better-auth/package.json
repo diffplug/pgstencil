@@ -8,6 +8,7 @@
     "hono": "^4.13.7",
     "kysely": "0.29.5",
     "pg": "^8.16.0",
-    "pgstencil": "workspace:*"
+    "pgstencil": "workspace:*",
+    "@pgstencil/auth": "workspace:*"
   }
 }

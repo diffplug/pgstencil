@@ -2,7 +2,7 @@
 
 Better Auth 1.7.3 handles email-code login and Google, Apple, Facebook and GitHub
 OAuth. pgstencil owns SQL migrations, Docker/IntegreSQL clones, email capture,
-security policy and deterministic tests. This example is isolated from the old
+security policy and deterministic tests. The reusable exports live in `@pgstencil/auth`; see [package consumption](../../PACKAGES.md#better-auth-integration). This example is isolated from the old
 auth implementation and from TTR production.
 
 With Docker running:
@@ -60,7 +60,7 @@ and/or `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` in the process environment.
 
 ## Determinism and Workers
 
-Test bundles inject `tests/support/scoped-globals.ts` with esbuild. Date, Web Crypto
+Test bundles inject the actual `@pgstencil/auth/better-auth-testing` module file with esbuild. Date, Web Crypto
 and outbound fetch facades use AsyncLocalStorage to select each app's clock,
 random stream and local provider server. They do not replace process globals,
 cryptographic hashing/signing or timers. Normal builds have no injection or test

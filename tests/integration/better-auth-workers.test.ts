@@ -63,6 +63,12 @@ async function fixture(deterministic = true) {
     }),
   );
   await worker.ready;
+  const csrfResponse = await worker.dispatchFetch(origin + '/api/auth/csrf');
+  const csrf = ((await csrfResponse.json()) as { csrf: string }).csrf;
+  const csrfCookie = csrfResponse.headers
+    .getSetCookie()
+    .map((v) => v.split(';')[0])
+    .join('; ');
   const post = (path: string, body: object, cookie = '') =>
     worker.dispatchFetch(origin + '/api/auth/' + path, {
       method: 'POST',
@@ -70,13 +76,16 @@ async function fixture(deterministic = true) {
         origin,
         'cf-connecting-ip': '192.0.2.1',
         'content-type': 'application/json',
-        cookie,
+        cookie: [csrfCookie, cookie].filter(Boolean).join('; '),
+        'x-csrf-token': csrf,
       },
       body: JSON.stringify(body),
     });
   return {
     ...context,
     worker,
+    csrf,
+    csrfCookie,
     post,
     get: async (cookie: string) =>
       (
@@ -99,11 +108,11 @@ async function fixture(deterministic = true) {
   };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
-async function login(f: Fixture) {
+async function login(f: Fixture, address = 'worker@example.test') {
   expect(
     (
       await f.post('email-otp/send-verification-otp', {
-        email: 'worker@example.test',
+        email: address,
         type: 'sign-in',
       })
     ).status,
@@ -111,7 +120,7 @@ async function login(f: Fixture) {
   const email = await f.email.next();
   const otp = email.text.match(/\b\d{8}\b/)![0];
   const response = await f.post('sign-in/email-otp', {
-    email: 'worker@example.test',
+    email: address,
     otp,
   });
   expect(response.status, await response.clone().text()).toBe(200);
@@ -150,7 +159,7 @@ test('Better Auth in workerd: deterministic replay, separate clocks, shared data
     sends.push(
       (
         await a.post('email-otp/send-verification-otp', {
-          email: 'limit@example.test',
+          email: `limit-${i}@example.test`,
           type: 'sign-in',
         })
       ).status,
@@ -165,9 +174,11 @@ test('Better Auth in workerd: deterministic replay, separate clocks, shared data
           origin,
           'cf-connecting-ip': ip,
           'x-forwarded-for': forwarded,
+          cookie: a.csrfCookie,
+          'x-csrf-token': a.csrf,
           'content-type': 'application/json',
         },
-        body: JSON.stringify({ email: 'limit@example.test', type: 'sign-in' }),
+        body: JSON.stringify({ email: `${ip}@example.test`, type: 'sign-in' }),
       },
     );
   expect((await sendFrom('192.0.2.1', '192.0.2.99')).status).toBe(429);
@@ -191,7 +202,7 @@ test('normal Workers build uses real time and randomness and contains no test cl
     Date.parse(session!.session.expiresAt) -
       Date.parse(session!.session.createdAt),
   ).toBe(86_400_000);
-  const second = await login(f);
+  const second = await login(f, 'second@example.test');
   expect(first.cookie).not.toBe(second.cookie);
   expect((await f.setTime('2020-01-01')).status).toBe(404);
   const inputs = Object.keys((await bundles[0]!).metafile!.inputs);

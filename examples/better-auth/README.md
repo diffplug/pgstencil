@@ -60,3 +60,30 @@ email integration in TTR and exercise its candidate deployment through real
 Hyperdrive/Neon/Postmark. Local workerd tests do not validate Cloudflare's hosted
 pooler. OAuth, linking policy, TTR migration and legacy-service deletion are
 outside this experiment.
+
+## Security policy
+
+Email codes deliberately work across browsers. Each browser obtains its own
+`GET /api/auth/csrf` token and sends it in `X-CSRF-Token` on same-origin JSON
+POSTs. The matching HttpOnly cookie is signed. HTTPS cookies use `__Host-` names.
+The API permits only the operations implemented by this example. Browser API
+responses omit upstream session tokens; pages and API responses are not cacheable.
+Scripts are external so CSP does not need `unsafe-inline`.
+
+OTP storage uses purpose-separated HMAC-SHA256 with the application secret.
+Atomic Postgres counters add a one-minute per-email resend cooldown, five sends
+per fifteen minutes, and fifteen verification submissions per fifteen minutes,
+on top of Better Auth's IP limits and three-attempt code budget. Counter keys
+contain keyed email hashes rather than email addresses.
+
+`sessionPolicy: 'single'` signs out all other devices on successful login (TTR).
+`'multiple'` is the default and retains independent device sessions (Dormouse).
+A Postgres trigger locks the user row and replaces sessions within the inserting
+transaction, so concurrent Workers cannot leave two active single-policy sessions.
+Logout revokes the current session.
+
+Better Auth's native database still contains session tokens. Browser authentication
+requires the server-signed cookie, and the test suite checks that a database token
+alone cannot authenticate. We deliberately retain the upstream session storage
+model instead of adding a custom adapter; no bearer-token plugin is enabled.
+The deterministic adapter remains exclusively in test builds.

@@ -43,7 +43,10 @@ const built = (async () => {
     createDeterministicApp: typeof createDeterministicApp;
   };
 })();
-async function fixture(now = '2020-01-01T00:00:00.000Z') {
+async function fixture(
+  now = '2020-01-01T00:00:00.000Z',
+  sessionPolicy: 'single' | 'multiple' = 'multiple',
+) {
   const context = await createTestContext({
     migrations,
     now,
@@ -52,17 +55,22 @@ async function fixture(now = '2020-01-01T00:00:00.000Z') {
   const { createDeterministicApp } = await built;
   const app = createDeterministicApp({
     ...context,
+    sessionPolicy,
     databaseUrl: context.database.url,
     origin,
     secret: 'better-auth-local-test-secret-32-characters',
   });
   const server = await listen(app.fetch);
   const client = request(server.origin);
+  const csrfResponse = await client.get('/api/auth/csrf');
+  const csrfCookie = cookieFrom(csrfResponse);
+  const csrf = csrfResponse.body.csrf as string;
   const post = (path: string, body: object, cookie = '') =>
     client
       .post('/api/auth/' + path)
       .set('Origin', origin)
-      .set('Cookie', cookie)
+      .set('Cookie', [csrfCookie, cookie].filter(Boolean).join('; '))
+      .set('X-CSRF-Token', csrf)
       .send(body);
   const get = (cookie = '') =>
     client.get('/api/auth/get-session').set('Cookie', cookie);
@@ -71,6 +79,8 @@ async function fixture(now = '2020-01-01T00:00:00.000Z') {
     app,
     server,
     client,
+    csrf,
+    csrfCookie,
     post,
     get,
     async close() {
@@ -210,3 +220,236 @@ test('Better Auth email rejects expired codes and cross-origin sign-in', async (
   expect(response.status).toBe(403);
   expect(f.email.all()).toHaveLength(1);
 });
+
+async function directPost(
+  f: Fixture,
+  path: string,
+  body: object,
+  ip = '192.0.2.1',
+  cookie = '',
+) {
+  return f.app.fetch(
+    new Request(origin + '/api/auth/' + path, {
+      method: 'POST',
+      headers: {
+        origin,
+        'content-type': 'application/json',
+        'x-csrf-token': f.csrf,
+        'x-pgstencil-client-ip': ip,
+        cookie: [f.csrfCookie, cookie].filter(Boolean).join('; '),
+      },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+test('email policy: secret-keyed codes, cross-browser redemption, concurrent single use and no token exposure', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  await f
+    .post('email-otp/send-verification-otp', {
+      email: 'alice@example.test',
+      type: 'sign-in',
+    })
+    .expect(200);
+  const otp = (await f.email.next()).text.match(/\b\d{8}\b/)![0];
+  const { createHmac, createHash } = await import('node:crypto');
+  const [record] = await queryDatabase<{ value: string }>(
+    f.database.url,
+    'SELECT value FROM verification',
+  );
+  const expected = createHmac(
+    'sha256',
+    'better-auth-local-test-secret-32-characters',
+  )
+    .update('email-otp\0')
+    .update(otp)
+    .digest('hex');
+  expect(record!.value).toBe(expected + ':0');
+  expect(record!.value).not.toContain(
+    createHash('sha256').update(otp).digest('base64url'),
+  );
+  // Another browser obtains its own CSRF token; it never receives the sending browser's cookies.
+  const other = await f.client.get('/api/auth/csrf');
+  const responses = await Promise.all(
+    Array.from({ length: 6 }, (_, i) =>
+      f.app.fetch(
+        new Request(origin + '/api/auth/sign-in/email-otp', {
+          method: 'POST',
+          headers: {
+            origin,
+            'content-type': 'application/json',
+            'x-csrf-token': other.body.csrf,
+            cookie: cookieFrom(other),
+            'x-pgstencil-client-ip': `192.0.2.${i + 1}`,
+          },
+          body: JSON.stringify({ email: 'alice@example.test', otp }),
+        }),
+      ),
+    ),
+  );
+  expect(responses.filter((r) => r.status === 200)).toHaveLength(1);
+  const success = responses.find((r) => r.status === 200)!;
+  expect(await success.json()).not.toHaveProperty('token');
+  const cookie = success.headers
+    .getSetCookie()
+    .map((v) => v.split(';')[0])
+    .join('; ');
+  const session = await f.get(cookie);
+  expect(session.body.session).not.toHaveProperty('token');
+  const [row] = await queryDatabase<{ token: string }>(
+    f.database.url,
+    'SELECT token FROM session',
+  );
+  // DB tokens are not sufficient: a valid server signature is required on cookies.
+  expect(
+    (await f.get(`__Host-pgstencil.session_token=${row!.token}`)).body,
+  ).toBeNull();
+  expect(success.headers.getSetCookie()[0]).toMatch(
+    /^__Host-pgstencil\.session_token=/,
+  );
+  expect(success.headers.getSetCookie()[0]).not.toContain('Domain=');
+});
+
+test('email policy: distributed IPs cannot bypass cooldown, send quota or attempt budget', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  const body = { email: 'limited@example.test', type: 'sign-in' };
+  const burst = await Promise.all(
+    Array.from({ length: 8 }, (_, i) =>
+      directPost(
+        f,
+        'email-otp/send-verification-otp',
+        body,
+        `192.0.2.${i + 1}`,
+      ),
+    ),
+  );
+  expect(burst.filter((r) => r.status === 200)).toHaveLength(1);
+  const otp = (await f.email.next()).text.match(/\b\d{8}\b/)![0];
+  for (let i = 0; i < 3; i++)
+    expect(
+      (
+        await directPost(
+          f,
+          'sign-in/email-otp',
+          { email: body.email, otp: 'wrong-code' },
+          `198.51.100.${i + 1}`,
+        )
+      ).status,
+    ).not.toBe(200);
+  expect(
+    (
+      await directPost(
+        f,
+        'sign-in/email-otp',
+        { email: body.email, otp },
+        '198.51.100.9',
+      )
+    ).status,
+  ).not.toBe(200);
+  for (let i = 0; i < 4; i++) {
+    f.time.advanceMilliseconds(60_000);
+    expect(
+      (
+        await directPost(
+          f,
+          'email-otp/send-verification-otp',
+          body,
+          `203.0.113.${i + 1}`,
+        )
+      ).status,
+    ).toBe(200);
+  }
+  f.time.advanceMilliseconds(60_000);
+  expect(
+    (
+      await directPost(
+        f,
+        'email-otp/send-verification-otp',
+        body,
+        '203.0.113.99',
+      )
+    ).status,
+  ).toBe(429);
+  f.time.advanceMilliseconds(15 * 60_000);
+  expect(
+    (
+      await directPost(
+        f,
+        'email-otp/send-verification-otp',
+        body,
+        '203.0.113.99',
+      )
+    ).status,
+  ).toBe(200);
+});
+
+test('auth surface: explicit CSRF, exact origin, security headers and disabled unused endpoints', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  const body = { email: 'alice@example.test', type: 'sign-in' };
+  await f.client
+    .post('/api/auth/email-otp/send-verification-otp')
+    .set('Origin', origin)
+    .send(body)
+    .expect(403);
+  await f.client
+    .post('/api/auth/email-otp/send-verification-otp')
+    .set('Origin', origin)
+    .set('Cookie', f.csrfCookie)
+    .set('X-CSRF-Token', 'wrong')
+    .send(body)
+    .expect(403);
+  await f.client
+    .post('/api/auth/email-otp/send-verification-otp')
+    .set('Origin', 'https://sibling.example.test')
+    .set('Cookie', f.csrfCookie)
+    .set('X-CSRF-Token', f.csrf)
+    .send(body)
+    .expect(403);
+  for (const path of [
+    'email-otp/check-verification-otp',
+    'email-otp/reset-password',
+    'update-user',
+    'revoke-sessions',
+  ])
+    await f.post(path, {}).expect(404);
+  const page = await f.client.get('/');
+  expect(page.headers['content-security-policy']).toContain(
+    "script-src 'self'",
+  );
+  expect(page.headers['content-security-policy']).toContain(
+    "frame-ancestors 'none'",
+  );
+  expect(page.headers['cache-control']).toBe('no-store');
+  expect(page.headers['referrer-policy']).toBe('no-referrer');
+  expect(f.email.all()).toHaveLength(0);
+});
+
+for (const policy of ['single', 'multiple'] as const)
+  test(`session policy: ${policy}`, async ({ onTestFinished }) => {
+    const f = await fixture('2020-01-01T00:00:00Z', policy);
+    onTestFinished(() => f.close());
+    const first = await login(f);
+    f.time.advanceMilliseconds(61_000);
+    const second = await login(f);
+    expect(first.cookie).not.toBe(second.cookie);
+    expect((await f.get(first.cookie)).body !== null).toBe(
+      policy === 'multiple',
+    );
+    expect((await f.get(second.cookie)).body.user.email).toBe(
+      'alice@example.test',
+    );
+    await f.post('sign-out', {}, second.cookie).expect(200);
+    expect((await f.get(second.cookie)).body).toBeNull();
+    expect((await f.get(first.cookie)).body !== null).toBe(
+      policy === 'multiple',
+    );
+  });

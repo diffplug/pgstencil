@@ -3,6 +3,7 @@ import { emailOTP } from 'better-auth/plugins/email-otp';
 import { Hono } from 'hono';
 import { connectDatabase } from 'pgstencil/postgres';
 import type { EmailSender } from 'pgstencil';
+import { keyed, protectAuth, publicAuthResponse } from './security.ts';
 
 export function authOptions(options: {
   database: ReturnType<typeof connectDatabase>;
@@ -10,7 +11,9 @@ export function authOptions(options: {
   secret: string;
   email: EmailSender;
   ipAddressHeaders?: string[];
+  sessionPolicy?: 'single' | 'multiple';
 }): BetterAuthOptions {
+  const secure = options.origin.startsWith('https:');
   return {
     appName: 'pgstencil Better Auth example',
     baseURL: options.origin,
@@ -19,6 +22,14 @@ export function authOptions(options: {
     telemetry: { enabled: false },
     // Keep production security enabled under NODE_ENV=test as well.
     advanced: {
+      useSecureCookies: false, // Names below carry __Host- themselves; avoid a second prefix.
+      cookiePrefix: secure ? '__Host-pgstencil' : 'pgstencil',
+      defaultCookieAttributes: {
+        secure,
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+      },
       disableOriginCheck: false,
       disableCSRFCheck: false,
       ipAddress: {
@@ -28,9 +39,31 @@ export function authOptions(options: {
     // Workers are request-scoped; an in-memory limiter would reset every request.
     rateLimit: { enabled: true, storage: 'database' },
     session: {
+      additionalFields: {
+        singleSession: {
+          type: 'boolean',
+          required: true,
+          defaultValue: false,
+          input: false,
+          returned: false,
+        },
+      },
+      freshAge: 10 * 60,
       expiresIn: 24 * 3600,
       disableSessionRefresh: true,
       cookieCache: { enabled: false },
+    },
+    databaseHooks: {
+      session: {
+        create: {
+          before: async (session) => ({
+            data: {
+              ...session,
+              singleSession: options.sessionPolicy === 'single',
+            },
+          }),
+        },
+      },
     },
     account: { accountLinking: { disableImplicitLinking: true } },
     plugins: [
@@ -38,7 +71,9 @@ export function authOptions(options: {
         otpLength: 8,
         expiresIn: 600,
         allowedAttempts: 3,
-        storeOTP: 'hashed',
+        storeOTP: {
+          hash: async (otp) => keyed(options.secret, 'email-otp', otp),
+        },
         async sendVerificationOTP({ email, otp, type }) {
           if (type !== 'sign-in')
             throw new Error('This example only supports sign-in email');
@@ -61,11 +96,20 @@ export function createEmailApp(options: {
   secret: string;
   email: EmailSender;
   ipAddressHeaders?: string[];
+  sessionPolicy?: 'single' | 'multiple';
 }) {
   const db = connectDatabase(options.databaseUrl);
   const auth = betterAuth(authOptions({ ...options, database: db }));
   const app = new Hono();
-  app.on(['POST', 'GET'], '/api/auth/*', (c) => auth.handler(c.req.raw));
+  protectAuth(app, { ...options, database: db });
+  app.on(['POST', 'GET'], '/api/auth/*', async (c) =>
+    publicAuthResponse(await auth.handler(c.req.raw)),
+  );
+  app.get('/auth.js', (c) =>
+    c.body(loginScript, 200, {
+      'content-type': 'text/javascript; charset=utf-8',
+    }),
+  );
   app.get('/', (c) => c.html(loginHtml));
   return { app, auth, db, close: () => db.destroy() };
 }
@@ -76,11 +120,14 @@ const loginHtml = `<!doctype html>
 <form id="send"><label>Email <input name="email" type="email" required></label><button>Email a code</button></form>
 <form id="verify" hidden><label>Code <input name="otp" inputmode="numeric" autocomplete="one-time-code" required></label><button>Sign in</button></form>
 <button id="logout" hidden>Sign out</button><p id="status" role="status"></p></main>
-<script type="module">
+<script type="module" src="/auth.js"></script></html>`;
+
+const loginScript = `
 const send = document.querySelector('#send'), verify = document.querySelector('#verify');
 const status = document.querySelector('#status'), logout = document.querySelector('#logout');
+let csrf;
 const post = async (path, body) => {
-  const response = await fetch('/api/auth/' + path, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body)});
+  const response = await fetch('/api/auth/' + path, {method:'POST', headers:{'content-type':'application/json', 'x-csrf-token':csrf}, body:JSON.stringify(body)});
   const data = await response.json();
   if (!response.ok) throw new Error(data.message || 'Request failed');
   return data;
@@ -101,5 +148,5 @@ async function session() {
   status.textContent=data ? 'Signed in as ' + data.user.email : 'Signed out';
   send.hidden=!!data; verify.hidden=true; logout.hidden=!data;
 }
-await session();
-</script></html>`;
+csrf = (await (await fetch('/api/auth/csrf')).json()).csrf;
+await session();`;

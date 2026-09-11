@@ -1,0 +1,13 @@
+{
+  "name": "@pgstencil/example-better-auth",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@hono/node-server": "1.19.17",
+    "better-auth": "1.7.3",
+    "hono": "^4.13.7",
+    "kysely": "0.29.5",
+    "pg": "^8.16.0",
+    "pgstencil": "workspace:*"
+  }
+}

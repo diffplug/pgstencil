@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Better Auth email example</title>
+<main><h1>Sign in</h1>
+<form id="send"><label>Email <input name="email" type="email" required></label><button>Email a code</button></form>
+<form id="verify" hidden><label>Code <input name="otp" inputmode="numeric" autocomplete="one-time-code" required></label><button>Sign in</button></form>
+<button id="logout" hidden>Sign out</button><p id="status" role="status"></p></main>
+<script type="module">
+const send = document.querySelector('#send'), verify = document.querySelector('#verify');
+const status = document.querySelector('#status'), logout = document.querySelector('#logout');
+const post = async (path, body) => {
+  const response = await fetch('/api/auth/' + path, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body)});
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.message || 'Request failed');
+  return data;
+};
+send.onsubmit = async (event) => {
+  event.preventDefault();
+  try { await post('email-otp/send-verification-otp', {email:send.email.value, type:'sign-in'}); verify.hidden=false; status.textContent='Check your email for a code.'; }
+  catch (error) { status.textContent=error.message; }
+};
+verify.onsubmit = async (event) => {
+  event.preventDefault();
+  try { await post('sign-in/email-otp', {email:send.email.value, otp:verify.otp.value}); await session(); }
+  catch (error) { status.textContent=error.message; }
+};
+logout.onclick = async () => { try { await post('sign-out', {}); await session(); } catch (error) { status.textContent=error.message; } };
+async function session() {
+  const data = await (await fetch('/api/auth/get-session')).json();
+  status.textContent=data ? 'Signed in as ' + data.user.email : 'Signed out';
+  send.hidden=!!data; verify.hidden=true; logout.hidden=!data;
+}
+await session();
+</script></html>

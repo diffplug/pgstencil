@@ -6,7 +6,7 @@ import {
   type DiagnosticOptions,
 } from 'pgstencil/diagnostics';
 import { betterAuth, type BetterAuthOptions } from 'better-auth';
-import { getSessionFromCtx } from 'better-auth/api';
+import { getSessionFromCtx, isAPIError } from 'better-auth/api';
 import { lastLoginMethod } from 'better-auth/plugins';
 import { emailOTP } from 'better-auth/plugins/email-otp';
 import { Hono } from 'hono';
@@ -83,6 +83,8 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
     onAPIError: {
       errorURL: options.origin + (options.errorPath ?? '/'),
       onError: (error) => {
+        // Expected 4xx responses are recorded by auth.rejected after dispatch.
+        if (isAPIError(error) && error.statusCode < 500) return;
         diagnostic('request.failed', {
           reason: 'unexpected_error',
           ...diagnosticError(error),

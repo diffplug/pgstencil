@@ -36,7 +36,7 @@ The workspace contains `pgstencil`, `@pgstencil/auth`, and `@pgstencil/stripe`. 
 
 Hono and Cloudflare Workers are supported through the shared Fetch adapter and request-scoped Hyperdrive connections. See [WORKERS.md](WORKERS.md) for the deployable example, local runtime tests, and deployment preparation.
 
-An isolated [Better Auth email experiment](examples/better-auth/README.md) explores replacing the custom auth layer while preserving deterministic parallel tests on Node and Workers. Run `pnpm dev:better-auth` for its local email-code demo or `pnpm test:better-auth` for its tests.
+The [Better Auth integration](examples/better-auth/README.md) is the path for new applications: email codes, Google/Apple/Facebook/GitHub login, explicit account linking, and configurable single or multiple sessions. It preserves deterministic parallel tests on Node and Workers. Run `pnpm dev:better-auth` for the local demo or `pnpm test:better-auth` for its tests. [PACKAGES.md](PACKAGES.md#better-auth-integration) shows the public package API. The original code/link and billing example remains available during the staged migration.
 
 ## Write a test
 
@@ -122,7 +122,7 @@ The configured pool supports 40 test databases per fingerprint, with Postgres ca
 
 Docker must be running; pgstencil does not install or launch Docker Desktop. If initialization is interrupted, rerun the command. A stale process lock is removed when its owning PID is no longer alive. Do not delete `.pgstencil` while another process uses it.
 
-## Login and production boundaries
+## Original login example and production boundaries
 
 The example implements browser-bound code/link challenges, confirmation POSTs that do not consume links during GET previews, 10-minute deadlines, five attempts per challenge, resend cooldowns, database-backed email/IP rate limits shared across instances, one-time atomic redemption, normalized email uniqueness, fixed 24-hour opaque sessions, session rotation/revocation, CSRF tokens, origin checks, and escaped HTML.
 

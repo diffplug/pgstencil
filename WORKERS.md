@@ -1,5 +1,13 @@
 # Hono and Cloudflare Workers
 
+For new authentication integrations, use `@pgstencil/auth/better-auth-workers`.
+[The package recipe](PACKAGES.md#better-auth-integration) covers Hono composition,
+Postmark, SQL migrations, session policies and deterministic test bundles.
+[The Better Auth example](examples/better-auth/README.md) documents the email and
+OAuth protocol plus production acceptance checks.
+
+The adapter below is the original implementation, retained for staged upgrades.
+
 `@pgstencil/auth/fetch` owns the JSON routes, cookies and CSRF checks.
 `@pgstencil/auth/hono` mounts that adapter in Hono; the existing `/http` export
 bridges the same adapter to Node. `@pgstencil/auth/workers` composes a Hono app

@@ -44,6 +44,9 @@ await writeFile(
 import { allocateDatabase, connectDatabase, readMigrations, migrate } from 'pgstencil/database';
 import { Auth, type AuthDB } from '@pgstencil/auth';
 import { authMigrations } from '@pgstencil/auth/migrations';
+import { betterAuthMigrations } from '@pgstencil/auth/better-auth-migrations';
+import { createAuthApp } from '@pgstencil/auth/better-auth';
+import { deterministicScope } from '@pgstencil/auth/better-auth-testing';
 import { createAuthHttp } from '@pgstencil/auth/http';
 import { Billing, type BillingDB } from '@pgstencil/stripe';
 import { billingMigrations } from '@pgstencil/stripe/migrations';
@@ -59,7 +62,7 @@ for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
   assert.ok(readFileSync(new URL('../LICENSE', entry), 'utf8').startsWith('MIT License'));
 }
 assert.ok(readFileSync(new URL('compose.yaml', import.meta.resolve('pgstencil/database')), 'utf8').includes('integresql'));
-const lease = await allocateDatabase([authMigrations, billingMigrations]);
+const lease = await allocateDatabase([authMigrations, billingMigrations, betterAuthMigrations]);
 const db = connectDatabase<AuthDB>(lease.url);
 const billingDb = connectDatabase<BillingDB>(lease.url);
 const time = new DevTime(); const random = new DevRandom(); const email = new EmailDev(time);
@@ -78,8 +81,22 @@ try {
   for (const event of dev.events) { const signed = dev.signed(event); await billing.webhook(signed.body, signed.signature); }
   assert.equal((await billing.status(session.user_id)).access, true);
   assert.equal(typeof createAuthHttp, 'function');
-  await migrate(lease.url, await readMigrations([authMigrations, billingMigrations]));
-  console.log('Packed imports, declarations, Compose/SQL assets, email login and card-required trial passed.');
+  await migrate(lease.url, await readMigrations([authMigrations, billingMigrations, betterAuthMigrations]));
+  const modern = createAuthApp({databaseUrl:lease.url,origin:'https://consumer.test',secret:'packed-consumer-secret-at-least-32',email,sessionPolicy:'single'});
+  try {
+    const csrfResponse = await modern.app.fetch(new Request('https://consumer.test/api/auth/csrf'));
+    const csrf = (await csrfResponse.json()).csrf;
+    const cookie = csrfResponse.headers.getSetCookie().map((v) => v.split(';')[0]).join('; ');
+    const post = (path: string, body: object) => modern.app.fetch(new Request('https://consumer.test/api/auth/' + path, {method:'POST',headers:{origin:'https://consumer.test',cookie,'x-csrf-token':csrf,'content-type':'application/json','x-pgstencil-client-ip':'127.0.0.1'},body:JSON.stringify(body)}));
+    assert.equal((await post('email-otp/send-verification-otp',{email:'modern@example.test',type:'sign-in'})).status,200);
+    const otp = (await email.next()).text.match(/\\b\\d{8}\\b/)![0];
+    const signedIn = await post('sign-in/email-otp',{email:'modern@example.test',otp});
+    assert.equal(signedIn.status,200);
+    assert.ok(signedIn.headers.getSetCookie()[0].startsWith('__Host-pgstencil.session_token='));
+    assert.equal((await signedIn.json()).token,undefined);
+    assert.equal(typeof deterministicScope.run,'function');
+  } finally { await modern.close(); }
+  console.log('Packed imports, declarations, SQL assets, legacy/Better Auth login and card-required trial passed.');
 } finally { await db.destroy(); await billingDb.destroy(); await dev.close(); await lease.close(); email.close(); }
 `,
 );

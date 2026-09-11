@@ -8,3 +8,6 @@ coverage/
 !.env.example
 # Package copies are generated from the root license during build.
 packages/*/LICENSE
+
+.wrangler/
+.dev.vars*

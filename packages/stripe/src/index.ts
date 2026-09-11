@@ -487,15 +487,18 @@ export class Billing {
     };
   }
   /** Throws BillingError(400) for anything the sender got wrong. */
-  verifyWebhook(body: Buffer | string, signature: string): Stripe.Event {
+  async verifyWebhook(
+    body: Buffer | string,
+    signature: string,
+  ): Promise<Stripe.Event> {
     let event: Stripe.Event;
     try {
-      event = this.stripe.webhooks.constructEvent(
+      event = await this.stripe.webhooks.constructEventAsync(
         body,
         signature,
         this.config.webhookSecret,
         300,
-        undefined,
+        Stripe.createSubtleCryptoProvider(),
         this.time.now().getTime(),
       );
     } catch (error) {
@@ -518,16 +521,26 @@ export class Billing {
     /** Application database effects join the same commit and retry boundary. */
     apply?: (event: Stripe.Event, trx: Transaction<BillingDB>) => Promise<void>,
   ): Promise<void> {
-    const event = this.verifyWebhook(body, signature);
+    const event = await this.verifyWebhook(body, signature);
     try {
       await this.db.transaction().execute(async (trx) => {
-        await sql`select pg_advisory_xact_lock(hashtext(${`stripe-event:${event.id}`}))`.execute(
-          trx,
-        );
+        await trx
+          .insertInto('events')
+          .values({
+            id: event.id,
+            type: event.type,
+            received_at: this.time.now(),
+            processed_at: null,
+            attempts: 0,
+            failed: false,
+          })
+          .onConflict((c) => c.column('id').doNothing())
+          .execute();
         const saved = await trx
           .selectFrom('events')
           .selectAll()
           .where('id', '=', event.id)
+          .forUpdate()
           .executeTakeFirst();
         if (saved?.processed_at) return;
         // Any event naming a customer we own triggers the same authoritative

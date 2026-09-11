@@ -229,7 +229,14 @@ export class OAuth {
       const result = await db
         .transaction()
         .execute(async (trx): Promise<AuthResult> => {
-          await sql`SELECT pg_advisory_xact_lock(hashtext(${'oauth-identity:' + provider + ':' + identity.subject}))`.execute(
+          // A bounded set of lock rows also covers identities not inserted yet.
+          // Hash collisions only serialize unrelated logins; they cannot merge them.
+          const bucket =
+            parseInt(
+              digest(provider + ':' + identity.subject).slice(0, 8),
+              16,
+            ) % 64;
+          await sql`SELECT id FROM oauth_locks WHERE id = ${bucket} FOR UPDATE`.execute(
             trx,
           );
           const now = time.now();

@@ -134,3 +134,32 @@ Personal and work/school accounts are supported; verified email can participate
 in same-email linking. Unverified email does not establish an account match.
 [Microsoft configuration and identity checks](examples/better-auth/README.md#microsoft)
 include the optional ID-token claims needed for email matching.
+
+## Structured diagnostics
+
+`pgstencil/diagnostics` provides opt-in JSON diagnostics without a logging dependency.
+Wrap your outer request handler with `observeRequest(request, { revision: buildSha },
+async () => app.fetch(request, env, ctx))`. Node `createAuthApp` and the Better Auth
+Workers adapter also accept `diagnostics: {}` when no outer wrapper is needed.
+Nested wrappers reuse one server-generated UUID, returned in `X-Request-ID`.
+Failed OAuth redirects include `request_id` for support; it grants no authority.
+
+Auth records distinguish state validation, token exchange, key fetching, ID-token
+and profile checks, login, logout, rejection and email delivery. Stripe records
+verified webhook receipt, committed processing and failures, including the Stripe
+event ID. For jobs and webhooks outside a request wrapper, use
+`withDiagnostics(options, () => billing.handleWebhook(...))`. The database webhook
+ledger remains the durable record; logs are diagnostic and may expire or be lost.
+
+Only enumerated categories, bounded numbers, booleans and validated correlation
+identifiers are emitted. No raw paths, query strings, request bodies, headers,
+emails, tokens, SQL, error messages or stacks are serialized. Token-check flags
+are untrusted diagnostic hints; they never change authentication decisions.
+The default sink writes JSON to console. Cloudflare hosts should enable Workers
+Logs, disable automatic invocation logs, and enable query-string redaction.
+Other application/platform logging must be configured separately.
+
+Tests can inject `sink`, `time: DevTime`, and `requestId`. AsyncLocalStorage isolates
+concurrent requests; there are no global time patches. Logging sink failures are
+ignored so they cannot change authentication or payment outcomes. Successful
+static requests are omitted; API completions include status and elapsed time.

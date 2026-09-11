@@ -1,5 +1,14 @@
 import type { EmailSender } from 'pgstencil';
 
+class EmailDeliveryError extends Error {
+  constructor(
+    readonly httpStatus: number,
+    readonly providerCode?: number,
+  ) {
+    super('Email delivery failed');
+  }
+}
+
 /** Production transport; tests inject EmailDev instead. Provider errors contain no message content. */
 export function postmarkEmail(token: string, from: string): EmailSender {
   if (!token || !from)
@@ -32,9 +41,13 @@ export function postmarkEmail(token: string, from: string): EmailSender {
             : {}),
         }),
       });
-      if (!response.ok) throw new Error('Email delivery failed');
+      if (!response.ok) throw new EmailDeliveryError(response.status);
       const result = (await response.json()) as { ErrorCode?: number };
-      if (result.ErrorCode !== 0) throw new Error('Email delivery failed');
+      if (result.ErrorCode !== 0)
+        throw new EmailDeliveryError(
+          response.status,
+          typeof result.ErrorCode === 'number' ? result.ErrorCode : undefined,
+        );
     },
   };
 }

@@ -8,7 +8,8 @@
     "./database": "./src/database.ts",
     "./snapshots": "./src/snapshots.ts",
     "./testing": "./src/testing.ts",
-    "./postgres": "./src/postgres.ts"
+    "./postgres": "./src/postgres.ts",
+    "./diagnostics": "./src/diagnostics.ts"
   },
   "dependencies": {
     "pg": "^8.16.0",
@@ -47,6 +48,10 @@
       "./postgres": {
         "types": "./dist/postgres.d.ts",
         "import": "./dist/postgres.js"
+      },
+      "./diagnostics": {
+        "types": "./dist/diagnostics.d.ts",
+        "import": "./dist/diagnostics.js"
       }
     }
   },

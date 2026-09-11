@@ -1,3 +1,4 @@
+import type { DiagnosticRecord } from '../../packages/pgstencil/src/diagnostics.ts';
 import { test, expect } from 'vitest';
 import { build } from 'esbuild';
 import { builtinModules } from 'node:module';
@@ -46,7 +47,10 @@ async function fixture(
   accountLinking: 'explicit' | 'same-email' = 'explicit',
   emailPolicy: Pick<
     AuthOptions,
-    'trustedEmailProviders' | 'allowMissingEmail' | 'rememberLoginMethod'
+    | 'trustedEmailProviders'
+    | 'allowMissingEmail'
+    | 'rememberLoginMethod'
+    | 'diagnostics'
   > = {},
 ) {
   const context = await createTestContext({
@@ -941,4 +945,86 @@ test('Microsoft tenant identity and unverified email cannot capture another acco
     ).toContain('error=oauth_failed');
     expect(await session(browser)).toBeNull();
   }
+});
+
+test('auth diagnostics identify Microsoft token failures without recording credentials or identity', async ({
+  onTestFinished,
+}) => {
+  const records: DiagnosticRecord[] = [];
+  let counter = 0;
+  const f = await fixture('multiple', 'same-email', {
+    allowMissingEmail: true,
+    trustedEmailProviders: ['microsoft'],
+    diagnostics: {
+      sink: (entry) => records.push(entry),
+      requestId: () =>
+        `11111111-1111-4111-8111-${String(++counter).padStart(12, '0')}`,
+    },
+  });
+  onTestFinished(() => f.close());
+  const browser = await f.browser();
+  const attempt = await login(f, browser, 'microsoft', {
+    email: 'private-person@example.test',
+    claims: { nonce: 'private-wrong-nonce' },
+  });
+  expect(attempt.response.headers.get('location')).toContain(
+    'error=oauth_failed',
+  );
+  const requestId = attempt.response.headers.get('x-request-id');
+  expect(attempt.response.headers.get('location')).toContain(
+    `request_id=${requestId}`,
+  );
+  expect(records).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        event: 'auth.oauth.stage',
+        provider: 'microsoft',
+        stage: 'token_exchange',
+        requestId,
+      }),
+      expect.objectContaining({
+        event: 'auth.oauth.failed',
+        provider: 'microsoft',
+        stage: 'id_token',
+        reason: 'id_token_rejected',
+        nonceMatches: false,
+        algorithmMatches: true,
+        audienceMatches: true,
+        requestId,
+      }),
+    ]),
+  );
+  expect(await session(browser)).toBeNull();
+  const next = await f.browser();
+  await login(f, next, 'microsoft', { email: 'private-person@example.test' });
+  expect(records).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        event: 'auth.login.succeeded',
+        provider: 'microsoft',
+      }),
+    ]),
+  );
+  const serialized = JSON.stringify(records);
+  for (const forbidden of [
+    'private-person',
+    'private-wrong-nonce',
+    'clientSecret',
+    'session_token',
+    'accessToken',
+    'idToken',
+    'cookie',
+    'better-auth-local-oauth-secret',
+  ])
+    expect(serialized).not.toContain(forbidden);
+  await next.post('email-otp/send-verification-otp', {
+    email: 'private-email@example.test',
+    type: 'sign-in',
+  });
+  expect(records).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ event: 'email.delivery.succeeded' }),
+    ]),
+  );
+  expect(JSON.stringify(records)).not.toContain('private-email');
 });

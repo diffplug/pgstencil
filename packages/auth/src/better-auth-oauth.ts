@@ -1,3 +1,9 @@
+import {
+  diagnostic,
+  diagnosticError,
+  diagnosticRequestId,
+  type DiagnosticFields,
+} from 'pgstencil/diagnostics';
 import type { BetterAuthOptions, BetterAuthPlugin } from 'better-auth';
 import { verifyProviderIdToken } from 'better-auth/oauth2';
 import type { GithubProfile } from 'better-auth/social-providers';
@@ -31,6 +37,26 @@ export const verifiedOidc: BetterAuthPlugin = {
   id: 'pgstencil-verified-oidc',
   init(context) {
     for (const provider of context.socialProviders) {
+      const name = provider.id as Provider;
+      const exchange = provider.validateAuthorizationCode.bind(provider);
+      provider.validateAuthorizationCode = async (data) => {
+        try {
+          const tokens = await exchange(data);
+          diagnostic('auth.oauth.stage', {
+            provider: name,
+            stage: 'token_exchange',
+          });
+          return tokens;
+        } catch (error) {
+          diagnostic('auth.oauth.failed', {
+            provider: name,
+            stage: 'token_exchange',
+            reason: 'upstream_failure',
+            ...diagnosticError(error),
+          });
+          throw error;
+        }
+      };
       if (!['google', 'apple', 'microsoft'].includes(provider.id)) continue;
       provider.requiresIdTokenNonce = true;
       if (provider.id !== 'microsoft')
@@ -38,8 +64,25 @@ export const verifiedOidc: BetterAuthPlugin = {
           provider.id === 'google'
             ? 'https://accounts.google.com'
             : 'https://appleid.apple.com';
-      if (provider.idToken && 'jwks' in provider.idToken)
+      if (provider.idToken && 'jwks' in provider.idToken) {
         provider.idToken.algorithms = ['RS256'];
+        if (typeof provider.idToken.jwks === 'function') {
+          const keys = provider.idToken.jwks;
+          provider.idToken.jwks = async (...args) => {
+            try {
+              return await keys(...args);
+            } catch (error) {
+              diagnostic('auth.oauth.failed', {
+                provider: name,
+                stage: 'key_fetch',
+                reason: 'upstream_failure',
+                ...diagnosticError(error),
+              });
+              throw error;
+            }
+          };
+        }
+      }
       if (provider.id === 'microsoft') {
         provider.accountSubject = ({ profile }) =>
           String(
@@ -51,9 +94,23 @@ export const verifiedOidc: BetterAuthPlugin = {
             try {
               providerSubject('microsoft', claims);
             } catch {
+              diagnostic('auth.oauth.failed', {
+                provider: name,
+                stage: 'id_token',
+                reason: 'invalid_provider_subject',
+                hasTenant: typeof claims.tid === 'string',
+                hasObjectId: typeof claims.oid === 'string',
+              });
               return false;
             }
-            return verifyClaims?.(claims) === true;
+            const valid = verifyClaims?.(claims) === true;
+            if (!valid)
+              diagnostic('auth.oauth.failed', {
+                provider: name,
+                stage: 'id_token',
+                reason: 'provider_claims_rejected',
+              });
+            return valid;
           };
         }
       }
@@ -68,21 +125,96 @@ export const verifiedOidc: BetterAuthPlugin = {
       };
       const info = provider.getUserInfo.bind(provider);
       provider.getUserInfo = async (tokens) => {
-        if (
-          !tokens.idToken ||
-          !tokens.expectedIdTokenNonce ||
+        let reason: DiagnosticFields['reason'];
+        if (!tokens.idToken) reason = 'missing_id_token';
+        else if (!tokens.expectedIdTokenNonce) reason = 'missing_nonce';
+        else if (
           !(await verifyProviderIdToken(
             provider,
             tokens.idToken,
             tokens.expectedIdTokenNonce,
           ))
         )
+          reason = 'id_token_rejected';
+        if (reason) {
+          diagnostic('auth.oauth.failed', {
+            provider: name,
+            stage: 'id_token',
+            reason,
+            ...tokenDiagnosticFlags(
+              tokens.idToken,
+              tokens.expectedIdTokenNonce,
+              provider.options?.clientId,
+              provider.id,
+            ),
+          });
           return null;
-        return info(tokens);
+        }
+        diagnostic('auth.oauth.stage', { provider: name, stage: 'id_token' });
+        try {
+          const profile = await info(tokens);
+          if (!profile)
+            diagnostic('auth.oauth.failed', {
+              provider: name,
+              stage: 'profile',
+              reason: 'profile_unavailable',
+            });
+          else
+            diagnostic('auth.oauth.stage', {
+              provider: name,
+              stage: 'profile',
+            });
+          return profile;
+        } catch (error) {
+          diagnostic('auth.oauth.failed', {
+            provider: name,
+            stage: 'profile',
+            reason: 'upstream_failure',
+            ...diagnosticError(error),
+          });
+          throw error;
+        }
       };
     }
   },
 };
+/** Untrusted token shape is diagnostic only; acceptance still uses the library verifier. */
+function tokenDiagnosticFlags(
+  token: string | undefined,
+  nonce: string | undefined,
+  audience: unknown,
+  provider: string,
+): DiagnosticFields {
+  if (!token || token.length > 65_536) return {};
+  try {
+    const [header, payload] = token.split('.');
+    const h = JSON.parse(Buffer.from(header!, 'base64url').toString());
+    const p = JSON.parse(Buffer.from(payload!, 'base64url').toString());
+    if (!p || !h) return {};
+    const issuer =
+      provider === 'microsoft'
+        ? `https://login.microsoftonline.com/${p.tid}/v2.0`
+        : provider === 'google'
+          ? 'https://accounts.google.com'
+          : 'https://appleid.apple.com';
+    return {
+      hasSubject: typeof p.sub === 'string',
+      hasTenant: typeof p.tid === 'string',
+      hasObjectId: typeof p.oid === 'string',
+      nonceMatches: typeof nonce === 'string' && p.nonce === nonce,
+      audienceMatches:
+        typeof audience === 'string' &&
+        (p.aud === audience ||
+          (Array.isArray(p.aud) && p.aud.includes(audience))),
+      issuerMatches: p.iss === issuer,
+      expired: typeof p.exp === 'number' && p.exp <= Date.now() / 1000,
+      issuedInFuture: typeof p.iat === 'number' && p.iat > Date.now() / 1000,
+      algorithmMatches: h.alg === 'RS256',
+    };
+  } catch {
+    return {};
+  }
+}
 export function oauthFromEnvironment(
   env: Record<string, string | undefined>,
 ): OAuthSettings {
@@ -295,9 +427,20 @@ export async function oauthRequest(
   },
 ): Promise<Response> {
   const path = new URL(request.url).pathname.slice('/api/auth'.length);
-  const fail = () => {
+  const callbackProvider = path.slice('/callback/'.length) as Provider;
+  const fail = (
+    reason: DiagnosticFields['reason'],
+    stage: DiagnosticFields['stage'] = 'state',
+  ) => {
+    diagnostic('auth.oauth.failed', {
+      provider: callbackProvider,
+      stage,
+      reason,
+    });
     const url = new URL(options.errorPath ?? '/', options.origin);
     url.searchParams.set('error', 'oauth_failed');
+    const id = diagnosticRequestId();
+    if (id) url.searchParams.set('request_id', id);
     return Response.redirect(url.href, 303);
   };
   if (path === '/sign-in/social' || path === '/link-social') {
@@ -339,7 +482,7 @@ export async function oauthRequest(
     const state = new URL(request.url).searchParams.get('state');
     const provider = path.slice('/callback/'.length) as Provider;
     if (!state || !providers.includes(provider) || !options.oauth?.[provider])
-      return fail();
+      return fail('missing_state');
     const prefix = options.origin.startsWith('https:')
       ? '__Host-pgstencil'
       : 'pgstencil';
@@ -357,9 +500,9 @@ export async function oauthRequest(
           `${state}.${await makeSignature(state, options.secret)}`,
         )
       )
-        return fail();
+        return fail('invalid_browser_binding');
     } catch {
-      return fail();
+      return fail('invalid_browser_binding');
     }
     const result = await sql<{
       value: string;
@@ -368,7 +511,8 @@ export async function oauthRequest(
       options.database,
     );
     const row = result.rows[0];
-    if (!row || row.expiresAt.getTime() <= Date.now()) return fail();
+    if (!row || row.expiresAt.getTime() <= Date.now())
+      return fail('expired_state');
     let data: {
       pgstencilProvider?: string;
       pgstencilSession?: string;
@@ -377,10 +521,11 @@ export async function oauthRequest(
     try {
       data = JSON.parse(row.value) as typeof data;
     } catch {
-      return fail();
+      return fail('invalid_state');
     }
-    if (data.pgstencilProvider !== provider) return fail();
-    if (data.link && options.accountLinking === 'same-email') return fail();
+    if (data.pgstencilProvider !== provider) return fail('provider_mismatch');
+    if (data.link && options.accountLinking === 'same-email')
+      return fail('linking_disabled');
     if (data.link) {
       const session = await auth.api.getSession({ headers: request.headers });
       if (
@@ -388,7 +533,7 @@ export async function oauthRequest(
         session.session.id !== data.pgstencilSession ||
         session.user.id !== data.link.userId
       )
-        return fail();
+        return fail('session_mismatch');
     }
     // Upstream checks state but uses separate read/delete calls. Claim it once
     // in Postgres before exchanging the code, including across Worker isolates.
@@ -399,7 +544,7 @@ export async function oauthRequest(
       await sql`INSERT INTO pgstencil_oauth_claims (key, expires_at) VALUES (${keyed(options.secret, 'oauth-state', state)}, ${row.expiresAt}) ON CONFLICT DO NOTHING RETURNING key`.execute(
         options.database,
       );
-    if (claim.rows.length !== 1) return fail();
+    if (claim.rows.length !== 1) return fail('state_replayed');
   }
   const response = await auth.handler(request);
   // Do not forward provider error descriptions or codes into URLs, logs or pages.
@@ -415,7 +560,13 @@ export async function oauthRequest(
       url.searchParams.set('provider', path.slice('/callback/'.length));
       return Response.redirect(url.href, 303);
     }
-    if (redirect.searchParams.has('error')) return fail();
+    if (redirect.searchParams.has('error')) {
+      const reason =
+        redirect.searchParams.get('error') === 'access_denied'
+          ? 'provider_cancelled'
+          : 'provider_error';
+      return fail(reason, 'callback');
+    }
   }
   return response;
 }

@@ -39,7 +39,10 @@ const built = (async () => {
     createDeterministicApp: typeof createDeterministicApp;
   };
 })();
-async function fixture(policy: 'single' | 'multiple' = 'multiple') {
+async function fixture(
+  policy: 'single' | 'multiple' = 'multiple',
+  accountLinking: 'explicit' | 'same-email' = 'explicit',
+) {
   const context = await createTestContext({
     migrations: resolve('packages/auth/better-auth-migrations'),
     seed: 'better-auth-oauth',
@@ -64,6 +67,7 @@ async function fixture(policy: 'single' | 'multiple' = 'multiple') {
     origin,
     secret: 'better-auth-local-oauth-secret-32-characters',
     sessionPolicy: policy,
+    accountLinking,
     oauth: allOAuthCredentials,
     outboundFetch,
   });
@@ -477,4 +481,147 @@ test('Better Auth OAuth: parallel applications reproduce cookies and session tim
     ),
   );
   expect(rows[0]).toEqual(rows[1]);
+});
+
+async function emailLogin(f: Fixture, browser: Browser, email: string) {
+  expect(
+    (
+      await browser.post('email-otp/send-verification-otp', {
+        email,
+        type: 'sign-in',
+      })
+    ).status,
+  ).toBe(200);
+  const otp = (await f.email.next()).text.match(/\b\d{8}\b/)![0];
+  expect((await browser.post('sign-in/email-otp', { email, otp })).status).toBe(
+    200,
+  );
+  return (await session(browser))!.user.id;
+}
+
+for (const oauthFirst of [false, true])
+  test(`Same-email linking: ${oauthFirst ? 'Google then email' : 'email then Google'} shares one account and revokes the old session`, async ({
+    onTestFinished,
+  }) => {
+    const f = await fixture('single', 'same-email');
+    onTestFinished(() => f.close());
+    const email = 'player@gmail.com';
+    const emailBrowser = await f.browser(),
+      googleBrowser = await f.browser();
+    let id: string;
+    if (oauthFirst) {
+      const result = await login(f, googleBrowser, 'google', { email });
+      expect(result.response.headers.get('location')).toBe(origin + '/');
+      expect(result.authorization.searchParams.get('prompt')).toBe(
+        'select_account',
+      );
+      id = (await session(googleBrowser))!.user.id;
+      expect(await emailLogin(f, emailBrowser, email)).toBe(id);
+      expect(await session(googleBrowser)).toBeNull();
+    } else {
+      id = await emailLogin(f, emailBrowser, email);
+      expect(
+        (
+          await login(f, googleBrowser, 'google', { email })
+        ).response.headers.get('location'),
+      ).toBe(origin + '/');
+      expect((await session(googleBrowser))!.user.id).toBe(id);
+      expect(await session(emailBrowser)).toBeNull();
+    }
+    expect(
+      await queryDatabase(f.database.url, 'SELECT id, email FROM "user"'),
+    ).toEqual([{ id, email }]);
+    expect(
+      (await emailBrowser.post('link-social', { provider: 'google' })).status,
+    ).toBe(404);
+  });
+
+test('Same-email linking: Workspace proof is authoritative; a different email and Apple relay remain separate accounts', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture('multiple', 'same-email');
+  onTestFinished(() => f.close());
+  const emailBrowser = await f.browser(),
+    google = await f.browser(),
+    apple = await f.browser();
+  const id = await emailLogin(f, emailBrowser, 'owner@example.test');
+  await login(f, google, 'google', {
+    email: 'owner@example.test',
+    claims: { hd: 'example.test' },
+  });
+  expect((await session(google))!.user.id).toBe(id);
+  await login(f, apple, 'apple', { email: 'relay@privaterelay.appleid.com' });
+  expect((await session(apple))!.user.id).not.toBe(id);
+  // Aliases and forwarding do not establish an email match.
+  const alias = await f.browser();
+  await login(f, alias, 'google', {
+    subject: 'other-google',
+    email: 'alias@example.test',
+    claims: { hd: 'example.test' },
+  });
+  expect((await session(alias))!.user.id).not.toBe(id);
+});
+
+for (const provider of ['google', 'facebook', 'github'] as const)
+  test(`Same-email linking: ${provider} requires a fresh email session for non-authoritative email`, async ({
+    onTestFinished,
+  }) => {
+    const f = await fixture('single', 'same-email');
+    onTestFinished(() => f.close());
+    const browser = await f.browser();
+    const first = await login(f, browser, provider);
+    expect(first.response.headers.get('location')).toBe(
+      origin + '/?error=email_verification_required&provider=' + provider,
+    );
+    expect(await session(browser)).toBeNull();
+    expect(
+      await queryDatabase(f.database.url, 'SELECT id FROM "user"'),
+    ).toEqual([]);
+    const id = await emailLogin(f, browser, 'oauth@example.test');
+    const result = await login(f, browser, provider);
+    expect(result.response.headers.get('location')).toBe(origin + '/');
+    expect((await session(browser))!.user.id).toBe(id);
+    const other = await f.browser();
+    // Once linked, the stable provider identity is sufficient, without another code.
+    expect(
+      (await login(f, other, provider)).response.headers.get('location'),
+    ).toBe(origin + '/');
+    expect((await session(other))!.user.id).toBe(id);
+    expect(await session(browser)).toBeNull();
+  });
+
+test('Same-email linking: wrong-email, OAuth-only, expired and revoked sessions cannot supply mailbox proof', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture('single', 'same-email');
+  onTestFinished(() => f.close());
+  const browser = await f.browser();
+  await emailLogin(f, browser, 'different@example.test');
+  expect(
+    (await login(f, browser, 'google')).response.headers.get('location'),
+  ).toContain('error=email_verification_required');
+  await browser.post('sign-out', {});
+  f.time.advanceMilliseconds(11_000);
+  await login(f, browser, 'apple');
+  expect(
+    (await login(f, browser, 'google')).response.headers.get('location'),
+  ).toContain('error=email_verification_required');
+  await emailLogin(f, browser, 'oauth@example.test');
+  const pending = f.provider.authorize(
+    'google',
+    await start(browser, 'google'),
+  );
+  await browser.post('sign-out', {});
+  expect((await browser.follow(pending)).headers.get('location')).toContain(
+    'error=email_verification_required',
+  );
+  f.time.advanceMilliseconds(60_000);
+  await emailLogin(f, browser, 'oauth@example.test');
+  f.time.advanceMilliseconds(600_000);
+  expect(
+    (await login(f, browser, 'google')).response.headers.get('location'),
+  ).toContain('error=email_verification_required');
+  expect(
+    await queryDatabase(f.database.url, 'SELECT "providerId" FROM account'),
+  ).toEqual([{ providerId: 'apple' }]);
 });

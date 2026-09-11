@@ -48,6 +48,7 @@ type Env = BetterAuthWorkerBindings & {
 const auth = createBetterAuthWorker<Env>({
   appName: 'Type The Rhythm',
   sessionPolicy: 'single', // Dormouse uses 'multiple'.
+  accountLinking: 'same-email', // Default: 'explicit'.
   successPath: '/profile',
   errorPath: '/login',
   email: (env) => postmarkEmail(env.POSTMARK_SERVER_TOKEN, env.EMAIL_FROM),
@@ -77,3 +78,27 @@ The [working example](examples/better-auth/README.md) documents the HTTP protoco
 security choices, native session-token storage tradeoff, test coverage and
 provider callback registration. `packages:verify` also installs and exercises
 this integration from the tarball alongside the legacy auth and Stripe packages.
+
+### Account linking policies
+
+`accountLinking: 'explicit'` (default) requires an authenticated Connect action
+and permits different verified emails. `same-email` enables automatic matching
+and makes POST `/api/auth/link-social` return 404, including for signed-in users.
+Google always requests its account chooser. Existing provider bindings remain
+stable if a provider later changes its email; policy changes do not unlink them.
+
+For a new identity in `same-email` mode, Apple and Google Gmail/Workspace can
+establish mailbox ownership. Google third-party addresses, Facebook and GitHub
+require a live email-OTP session for the same address, less than ten minutes old.
+OAuth-only sessions cannot supply this proof. Unverified/missing provider email
+still fails closed. Case-insensitive matching does not collapse aliases or relay
+addresses. Apple Hide My Email therefore creates a separate account.
+
+The fallback callback redirects to `errorPath` with
+`error=email_verification_required&provider=google` (or the relevant provider).
+Show an email-code form, verify that provider account's email with the normal
+email-OTP API, then retry `/api/auth/sign-in/social` in that browser. Do not redirect
+to Profile merely because this intermediate email login created a session. On
+success, the native provider binding makes future OAuth logins code-free. Allow
+cancelling the continuation to use ordinary email login instead. The server checks
+the proof; query parameters grant no authority and contain no email or tokens.

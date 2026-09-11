@@ -1,3 +1,10 @@
+import {
+  diagnostic,
+  diagnosticError,
+  observeRequest,
+  requestOperation,
+  type DiagnosticOptions,
+} from 'pgstencil/diagnostics';
 import { betterAuth, type BetterAuthOptions } from 'better-auth';
 import { getSessionFromCtx } from 'better-auth/api';
 import { lastLoginMethod } from 'better-auth/plugins';
@@ -27,6 +34,7 @@ import {
 
 export interface AuthOptions {
   database: ReturnType<typeof connectDatabase>;
+  diagnostics?: DiagnosticOptions;
   origin: string;
   secret: string;
   email: EmailSender;
@@ -72,7 +80,15 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
     telemetry: { enabled: false },
     logger: { disabled: true },
     socialProviders: socialProviders(options.oauth, options.allowMissingEmail),
-    onAPIError: { errorURL: options.origin + (options.errorPath ?? '/') },
+    onAPIError: {
+      errorURL: options.origin + (options.errorPath ?? '/'),
+      onError: (error) => {
+        diagnostic('request.failed', {
+          reason: 'unexpected_error',
+          ...diagnosticError(error),
+        });
+      },
+    },
     user: {
       validateUserInfo: async ({ user, source }, context) => {
         if (typeof user.email === 'string' && isIdentityEmail(user.email)) {
@@ -91,6 +107,11 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
               )
           )
             return;
+          diagnostic('auth.oauth.failed', {
+            provider,
+            stage: 'profile',
+            reason: 'reserved_email',
+          });
           return { error: 'Reserved email address' };
         }
         if (
@@ -98,8 +119,14 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
           (user.emailVerified !== true ||
             typeof user.email !== 'string' ||
             !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(user.email))
-        )
+        ) {
+          diagnostic('auth.oauth.failed', {
+            provider: source.oauth?.providerId as Provider,
+            stage: 'profile',
+            reason: 'unverified_email',
+          });
           return { error: 'A verified email address is required' };
+        }
         if (
           options.accountLinking === 'same-email' &&
           source.method === 'oauth' &&
@@ -128,8 +155,14 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
                   options.database,
                 )
               ).rows.length
-            )
+            ) {
+              diagnostic('auth.oauth.failed', {
+                provider: source.oauth?.providerId as Provider,
+                stage: 'profile',
+                reason: 'mailbox_proof_required',
+              });
               return { error: 'email_verification_required' };
+            }
           }
         }
       },
@@ -248,15 +281,25 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
           if (isIdentityEmail(email)) throw new Error('Not a delivery address');
           if (type !== 'sign-in')
             throw new Error('This example only supports sign-in email');
-          await options.email.send({
-            from: 'signin@example.test',
-            to: [email],
-            subject: options.appName
-              ? `Your ${options.appName} sign-in code`
-              : 'Your sign-in code',
-            text: `Your sign-in code is ${otp}. It expires in 10 minutes.`,
-            html: `<p>Your sign-in code is <strong>${otp}</strong>.</p><p>It expires in 10 minutes.</p>`,
-          });
+          try {
+            await options.email.send({
+              from: 'signin@example.test',
+              to: [email],
+              subject: options.appName
+                ? `Your ${options.appName} sign-in code`
+                : 'Your sign-in code',
+              text: `Your sign-in code is ${otp}. It expires in 10 minutes.`,
+              html: `<p>Your sign-in code is <strong>${otp}</strong>.</p><p>It expires in 10 minutes.</p>`,
+            });
+            diagnostic('email.delivery.succeeded');
+          } catch (error) {
+            diagnostic('email.delivery.failed', {
+              stage: 'transport',
+              reason: 'upstream_failure',
+              ...diagnosticError(error),
+            });
+            throw error;
+          }
         },
       }),
     ],
@@ -267,6 +310,45 @@ export function createAuthApp(options: AuthAppOptions) {
   const db = connectDatabase(options.databaseUrl);
   const auth = betterAuth(authOptions({ ...options, database: db }));
   const app = new Hono();
+  if (options.diagnostics)
+    app.use('*', async (c, next) => {
+      c.res = await observeRequest(
+        c.req.raw,
+        options.diagnostics!,
+        async () => {
+          await next();
+          return c.res;
+        },
+      );
+    });
+  app.use('*', async (c, next) => {
+    await next();
+    const operation = requestOperation(c.req.raw);
+    if (c.res.status >= 400)
+      diagnostic('auth.rejected', {
+        operation,
+        status: c.res.status,
+        reason: c.res.status === 429 ? 'rate_limited' : 'request_rejected',
+      });
+    else if (operation === 'auth.logout') diagnostic('auth.logout');
+    else if (
+      (operation === 'auth.email.verify' ||
+        operation === 'auth.oauth.callback') &&
+      c.res.headers
+        .getSetCookie()
+        .some(
+          (cookie) =>
+            cookie.includes('.session_token=') && !cookie.includes('Max-Age=0'),
+        )
+    )
+      diagnostic('auth.login.succeeded', {
+        operation,
+        provider:
+          operation === 'auth.oauth.callback'
+            ? (new URL(c.req.url).pathname.split('/').at(-1) as Provider)
+            : undefined,
+      });
+  });
   protectAuth(app, { ...options, database: db });
   app.on(['POST', 'GET'], '/api/auth/*', async (c) =>
     publicAuthResponse(
@@ -274,9 +356,14 @@ export function createAuthApp(options: AuthAppOptions) {
     ),
   );
   app.get('/api/providers', (c) => c.json(Object.keys(options.oauth ?? {})));
-  app.onError((_error, c) =>
-    c.json({ message: 'Authentication failed; please try again' }, 500),
-  );
+  app.onError((error, c) => {
+    diagnostic('request.failed', {
+      operation: requestOperation(c.req.raw),
+      reason: 'unexpected_error',
+      ...diagnosticError(error),
+    });
+    return c.json({ message: 'Authentication failed; please try again' }, 500);
+  });
   return {
     app,
     auth,

@@ -1,3 +1,7 @@
+import {
+  withDiagnostics,
+  type DiagnosticRecord,
+} from '../../packages/pgstencil/src/diagnostics.ts';
 import { test, expect } from 'vitest';
 import { createTestContext } from '../../packages/pgstencil/src/testing.ts';
 import { connectDatabase } from '../../packages/pgstencil/src/database.ts';
@@ -316,5 +320,39 @@ billingTest(
     await f.start('monthly');
     expect((await f.billing.status('alice')).trialEligible).toBe(true);
     expect((await f.billing.status('alice')).access).toBe(false);
+  },
+);
+
+billingTest(
+  'payment diagnostics keep verified event IDs and report failure before recovery without payloads',
+  async ({ f }) => {
+    const { session } = await f.start();
+    f.dev.completeCheckout(session.id);
+    const event = f.dev.events[0]!;
+    const signed = f.dev.signed(event);
+    const records: DiagnosticRecord[] = [];
+    const options = {
+      sink: (record: DiagnosticRecord) => records.push(record),
+      time: f.time,
+    };
+    await expect(
+      withDiagnostics(options, () =>
+        f.billing.webhook(signed.body, signed.signature, async () => {
+          throw new Error('private payment payload');
+        }),
+      ),
+    ).rejects.toThrow();
+    expect(records.map((r) => r.event)).toEqual([
+      'billing.webhook.received',
+      'billing.webhook.failed',
+    ]);
+    expect(records.every((r) => r.stripeEventId === event.id)).toBe(true);
+    await withDiagnostics(options, () =>
+      f.billing.webhook(signed.body, signed.signature),
+    );
+    expect(records.at(-1)?.event).toBe('billing.webhook.processed');
+    expect(JSON.stringify(records)).not.toContain('private payment payload');
+    expect(JSON.stringify(records)).not.toContain('alice@example.test');
+    expect(JSON.stringify(records)).not.toContain(signed.signature);
   },
 );

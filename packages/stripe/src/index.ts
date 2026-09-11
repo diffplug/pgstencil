@@ -1,3 +1,4 @@
+import { diagnostic, diagnosticError } from 'pgstencil/diagnostics';
 import Stripe from 'stripe';
 import { sql, type Kysely, type Transaction } from 'kysely';
 import { token, type Time, type RandomSource } from 'pgstencil';
@@ -521,7 +522,18 @@ export class Billing {
     /** Application database effects join the same commit and retry boundary. */
     apply?: (event: Stripe.Event, trx: Transaction<BillingDB>) => Promise<void>,
   ): Promise<void> {
-    const event = await this.verifyWebhook(body, signature);
+    let event: Stripe.Event;
+    try {
+      event = await this.verifyWebhook(body, signature);
+    } catch (error) {
+      diagnostic('billing.webhook.failed', {
+        stage: 'transport',
+        reason: 'request_rejected',
+        ...diagnosticError(error),
+      });
+      throw error;
+    }
+    diagnostic('billing.webhook.received', { stripeEventId: event.id });
     try {
       await this.db.transaction().execute(async (trx) => {
         await trx
@@ -575,7 +587,14 @@ export class Billing {
           .onConflict((c) => c.column('id').doUpdateSet(processed))
           .execute();
       });
+      diagnostic('billing.webhook.processed', { stripeEventId: event.id });
     } catch (error) {
+      diagnostic('billing.webhook.failed', {
+        stripeEventId: event.id,
+        stage: 'database',
+        reason: 'unexpected_error',
+        ...diagnosticError(error),
+      });
       await this.db
         .insertInto('events')
         .values({

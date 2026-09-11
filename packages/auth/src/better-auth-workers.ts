@@ -1,3 +1,8 @@
+import {
+  diagnostic,
+  diagnosticError,
+  observeRequest,
+} from 'pgstencil/diagnostics';
 import { Hono } from 'hono';
 import type { EmailSender } from 'pgstencil';
 import { createAuthApp, type AuthAppOptions } from './better-auth.ts';
@@ -22,6 +27,7 @@ export type BetterAuthWorkerBindings = {
 export function createBetterAuthWorker<E extends BetterAuthWorkerBindings>(
   options: Pick<
     AuthAppOptions,
+    | 'diagnostics'
     | 'sessionPolicy'
     | 'accountLinking'
     | 'trustedEmailProviders'
@@ -36,36 +42,45 @@ export function createBetterAuthWorker<E extends BetterAuthWorkerBindings>(
 ) {
   const app = new Hono<{ Bindings: E }>();
   app.all('*', async (c) => {
-    if (new URL(c.env.APP_ORIGIN).protocol !== 'https:')
-      throw new Error('Workers auth requires HTTPS');
-    const credentials: Record<string, string> = {};
-    for (const provider of providers)
-      for (const suffix of ['CLIENT_ID', 'CLIENT_SECRET']) {
-        const key = `${provider.toUpperCase()}_${suffix}`;
-        const value = c.env[key as keyof E];
-        if (typeof value === 'string') credentials[key] = value;
+    const handle = async () => {
+      if (new URL(c.env.APP_ORIGIN).protocol !== 'https:')
+        throw new Error('Workers auth requires HTTPS');
+      const credentials: Record<string, string> = {};
+      for (const provider of providers)
+        for (const suffix of ['CLIENT_ID', 'CLIENT_SECRET']) {
+          const key = `${provider.toUpperCase()}_${suffix}`;
+          const value = c.env[key as keyof E];
+          if (typeof value === 'string') credentials[key] = value;
+        }
+      const auth = createAuthApp({
+        ...options,
+        databaseUrl: c.env.HYPERDRIVE.connectionString,
+        origin: c.env.APP_ORIGIN,
+        secret: c.env.AUTH_SECRET,
+        email: options.email(c.env),
+        oauth: oauthFromEnvironment(credentials),
+        ipAddressHeaders: ['cf-connecting-ip'],
+      });
+      try {
+        return await auth.app.fetch(c.req.raw);
+      } finally {
+        await auth.close();
       }
-    const auth = createAuthApp({
-      ...options,
-      databaseUrl: c.env.HYPERDRIVE.connectionString,
-      origin: c.env.APP_ORIGIN,
-      secret: c.env.AUTH_SECRET,
-      email: options.email(c.env),
-      oauth: oauthFromEnvironment(credentials),
-      ipAddressHeaders: ['cf-connecting-ip'],
-    });
-    try {
-      return await auth.app.fetch(c.req.raw);
-    } finally {
-      await auth.close();
-    }
+    };
+    return options.diagnostics
+      ? observeRequest(c.req.raw, options.diagnostics, handle)
+      : handle();
   });
-  app.onError((_, c) =>
-    c.json(
+  app.onError((error, c) => {
+    diagnostic('request.failed', {
+      reason: 'unexpected_error',
+      ...diagnosticError(error),
+    });
+    return c.json(
       { message: 'Sign-in is temporarily unavailable. Please try again.' },
       503,
       { 'cache-control': 'no-store' },
-    ),
-  );
+    );
+  });
   return app;
 }

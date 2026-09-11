@@ -9,7 +9,7 @@ import { queryDatabase } from '../../packages/pgstencil/src/postgres.ts';
 import {
   mockOAuthServer,
   endpointPaths,
-  allOAuthCredentials,
+  betterAuthCredentials as allOAuthCredentials,
   type GrantOptions,
 } from '../support/oauth-server.ts';
 import type { AuthOptions } from '../../packages/auth/src/better-auth.ts';
@@ -46,7 +46,7 @@ async function fixture(
   accountLinking: 'explicit' | 'same-email' = 'explicit',
   emailPolicy: Pick<
     AuthOptions,
-    'trustedEmailProviders' | 'allowMissingEmail'
+    'trustedEmailProviders' | 'allowMissingEmail' | 'rememberLoginMethod'
   > = {},
 ) {
   const context = await createTestContext({
@@ -180,11 +180,19 @@ for (const provider of providers)
     expect(response.status, await response.clone().text()).toBe(302);
     expect(response.headers.get('location')).toBe(origin + '/');
     expect((await session(browser))?.user.email).toBe('oauth@example.test');
-    if (provider === 'google' || provider === 'github')
+    if (
+      provider === 'google' ||
+      provider === 'github' ||
+      provider === 'microsoft'
+    )
       expect(authorization.searchParams.get('code_challenge_method')).toBe(
         'S256',
       );
-    if (provider === 'google' || provider === 'apple')
+    if (
+      provider === 'google' ||
+      provider === 'apple' ||
+      provider === 'microsoft'
+    )
       expect(authorization.searchParams.get('nonce')).toBeTruthy();
     expect((await browser.follow(callback)).headers.get('location')).toContain(
       'error=oauth_failed',
@@ -204,7 +212,7 @@ for (const provider of providers)
     expect(f.destinations.length).toBeGreaterThan(0);
   });
 
-for (const provider of ['google', 'apple'] as const)
+for (const provider of ['google', 'apple', 'microsoft'] as const)
   test(`Better Auth OAuth: ${provider} rejects invalid signed claims`, async ({
     onTestFinished,
   }) => {
@@ -579,7 +587,10 @@ for (const provider of providers)
     expect(await session(first)).toBeNull();
     const other = await f.browser();
     await login(f, other, provider, {
-      subject: '987654321',
+      subject:
+        provider === 'microsoft'
+          ? '22222222-2222-4222-8222-222222222222'
+          : '987654321',
       email: '',
       githubEmails: [],
     });
@@ -796,4 +807,138 @@ test('Same-email linking: wrong-email, OAuth-only, expired and revoked sessions 
   expect(
     await queryDatabase(f.database.url, 'SELECT "providerId" FROM account'),
   ).toEqual([{ providerId: 'apple' }]);
+});
+
+test('Last login method remembers only successful sign-ins and survives logout', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture('multiple', 'same-email', {
+    rememberLoginMethod: true,
+  });
+  onTestFinished(() => f.close());
+  const browser = await f.browser();
+  const cookieName = '__Host-pgstencil.last_login_method';
+  expect(browser.jar.get(cookieName)).toBeUndefined();
+  await start(browser, 'apple');
+  expect(browser.jar.get(cookieName)).toBeUndefined();
+  await login(f, browser, 'apple', { badSignature: true });
+  expect(browser.jar.get(cookieName)).toBeUndefined();
+  const result = await login(f, browser, 'apple');
+  expect(browser.jar.get(cookieName)).toBe('apple');
+  const hint = result.response.headers
+    .getSetCookie()
+    .find((value) => value.startsWith(cookieName + '='))!;
+  expect(hint).toContain('Max-Age=2592000');
+  expect(hint).toContain('Secure');
+  expect(hint).toContain('SameSite=Lax');
+  expect(hint).not.toContain('HttpOnly');
+  await browser.post('sign-out', {});
+  expect(await session(browser)).toBeNull();
+  expect(browser.jar.get(cookieName)).toBe('apple');
+  await browser.post('sign-in/email-otp', {
+    email: 'hint@example.test',
+    otp: '00000000',
+  });
+  expect(browser.jar.get(cookieName)).toBe('apple');
+  await emailLogin(f, browser, 'hint@example.test');
+  expect(browser.jar.get(cookieName)).toBe('email');
+  f.time.advanceMilliseconds(11_000);
+  await login(f, browser, 'google', { badSignature: true });
+  expect(browser.jar.get(cookieName)).toBe('email');
+  // Remembering another browser's method never authenticates this browser.
+  const other = await f.browser();
+  other.jar.set(cookieName, 'apple');
+  expect(await session(other)).toBeNull();
+});
+
+for (const oauthFirst of [false, true])
+  test(`Microsoft verified email: ${oauthFirst ? 'OAuth first' : 'email first'} shares an account`, async ({
+    onTestFinished,
+  }) => {
+    const f = await fixture('single', 'same-email', {
+      trustedEmailProviders: ['microsoft'],
+      rememberLoginMethod: true,
+    });
+    onTestFinished(() => f.close());
+    const microsoft = await f.browser(),
+      emailBrowser = await f.browser();
+    const email = 'player@example.test';
+    let emailId: string | undefined;
+    if (!oauthFirst) emailId = await emailLogin(f, emailBrowser, email);
+    const result = await login(f, microsoft, 'microsoft', { email });
+    expect(result.response.headers.get('location')).toBe(origin + '/');
+    expect(result.authorization.searchParams.get('prompt')).toBe(
+      'select_account',
+    );
+    expect(result.authorization.searchParams.get('scope')).toBe(
+      'openid profile email',
+    );
+    expect(microsoft.jar.get('__Host-pgstencil.last_login_method')).toBe(
+      'microsoft',
+    );
+    const id = (await session(microsoft))!.user.id;
+    if (oauthFirst) {
+      emailId = await emailLogin(f, emailBrowser, email);
+      expect(await session(microsoft)).toBeNull();
+    } else expect(await session(emailBrowser)).toBeNull();
+    expect(emailId).toBe(id);
+    expect(
+      await queryDatabase(f.database.url, 'SELECT id FROM "user"'),
+    ).toEqual([{ id }]);
+  });
+
+test('Microsoft tenant identity and unverified email cannot capture another account', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture('single', 'same-email', {
+    trustedEmailProviders: ['microsoft'],
+    allowMissingEmail: true,
+  });
+  onTestFinished(() => f.close());
+  const owner = await f.browser();
+  const email = 'owner@example.test';
+  const ownerId = await emailLogin(f, owner, email);
+  const microsoft = await f.browser();
+  await login(f, microsoft, 'microsoft', {
+    email,
+    verified: false,
+    claims: { preferred_username: email },
+  });
+  const user = (await session(microsoft))!.user;
+  expect(user.email).toBeNull();
+  expect(user.id).not.toBe(ownerId);
+  expect((await session(owner))!.user.id).toBe(ownerId);
+  const workTenant = '33333333-3333-4333-8333-333333333333';
+  const work = await f.browser();
+  await login(f, work, 'microsoft', {
+    email,
+    verified: false,
+    claims: {
+      tid: workTenant,
+      iss: `https://login.microsoftonline.com/${workTenant}/v2.0`,
+    },
+  });
+  expect((await session(work))!.user.id).not.toBe(user.id);
+  // Stable tenant/object identity, not the token's mutable display/email data.
+  const returning = await f.browser();
+  await login(f, returning, 'microsoft', {
+    email: '',
+    claims: { sub: 'another-pairwise-value' },
+  });
+  expect((await session(returning))!.user).toMatchObject(user);
+  expect(await session(microsoft)).toBeNull();
+  for (const claims of [
+    { tid: null },
+    { tid: workTenant },
+    { oid: null },
+    { oid: 'invalid' },
+  ]) {
+    const browser = await f.browser();
+    expect(
+      (await login(f, browser, 'microsoft', { claims })).response.headers.get(
+        'location',
+      ),
+    ).toContain('error=oauth_failed');
+    expect(await session(browser)).toBeNull();
+  }
 });

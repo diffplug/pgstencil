@@ -119,3 +119,18 @@ permission disappears. Provider-only accounts stay provider-only even if the
 provider later supplies an email; adopting an address or merging existing accounts
 requires a separate account-recovery flow. Without a common email or an existing
 binding, different providers cannot be matched automatically.
+
+`rememberLoginMethod: true` enables Better Auth's last-login-method plugin with
+no database field. A successful login sets a readable 30-day cookie containing
+only `email` or a provider ID. Failed attempts and explicit links do not update
+it; logout retains it. The name is `__Host-pgstencil.last_login_method` on HTTPS
+and `pgstencil.last_login_method` locally. This is an untrusted display hint,
+never proof of identity or a replacement for a session. New browsers/private
+windows and cleared cookies have no hint.
+
+The Better Auth integration also supports `microsoft` with `MICROSOFT_CLIENT_ID`
+and `MICROSOFT_CLIENT_SECRET`. Its callback is `/api/auth/callback/microsoft`.
+Personal and work/school accounts are supported; verified email can participate
+in same-email linking. Unverified email does not establish an account match.
+[Microsoft configuration and identity checks](examples/better-auth/README.md#microsoft)
+include the optional ID-token claims needed for email matching.

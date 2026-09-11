@@ -23,7 +23,7 @@ const loginScript = `
 const send = document.querySelector('#send'), verify = document.querySelector('#verify');
 const status = document.querySelector('#status'), logout = document.querySelector('#logout');
 let csrf, signedIn = false;
-const providerNames = {google:'Google', apple:'Apple', facebook:'Facebook', github:'GitHub'};
+const providerNames = {google:'Google', apple:'Apple', facebook:'Facebook', github:'GitHub', microsoft:'Microsoft'};
 const enabledProviders = await (await fetch('/api/providers')).json();
 const showProviders = async () => {
   const container = document.querySelector('#providers'); container.replaceChildren();

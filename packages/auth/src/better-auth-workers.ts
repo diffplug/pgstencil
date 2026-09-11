@@ -26,6 +26,7 @@ export function createBetterAuthWorker<E extends BetterAuthWorkerBindings>(
     | 'accountLinking'
     | 'trustedEmailProviders'
     | 'allowMissingEmail'
+    | 'rememberLoginMethod'
     | 'appName'
     | 'successPath'
     | 'errorPath'

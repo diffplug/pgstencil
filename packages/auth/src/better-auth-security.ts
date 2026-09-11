@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { sql } from 'kysely';
 import type { Hono } from 'hono';
+import { isIdentityEmail } from './better-auth-email.ts';
 import { bodyLimit } from 'hono/body-limit';
 import type { connectDatabase } from 'pgstencil/postgres';
 
@@ -143,7 +144,11 @@ export function protectAuth(
     ) {
       const email =
         typeof body.email === 'string' ? body.email.toLowerCase() : '';
-      if (email.length > 254 || !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email))
+      if (
+        isIdentityEmail(email) ||
+        email.length > 254 ||
+        !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email)
+      )
         return c.json({ message: 'Invalid email' }, 400);
       const send = path === '/email-otp/send-verification-otp';
       if (send && body.type !== 'sign-in')
@@ -211,7 +216,12 @@ export async function publicAuthResponse(response: Response) {
               'emailAuthenticated',
             ].includes(key),
         )
-        .map(([key, item]) => [key, scrub(item)]),
+        .map(([key, item]) => [
+          key,
+          key === 'email' && typeof item === 'string' && isIdentityEmail(item)
+            ? null
+            : scrub(item),
+        ]),
     );
   };
   const headers = new Headers(response.headers);

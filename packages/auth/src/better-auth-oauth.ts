@@ -4,6 +4,7 @@ import type { GithubProfile } from 'better-auth/social-providers';
 import { makeSignature } from 'better-auth/crypto';
 import { sql } from 'kysely';
 import { equal, keyed } from './better-auth-security.ts';
+import { identityEmail, isIdentityEmail } from './better-auth-email.ts';
 import type { connectDatabase } from 'pgstencil/postgres';
 
 export const providers = ['google', 'apple', 'facebook', 'github'] as const;
@@ -73,9 +74,47 @@ export function oauthFromEnvironment(
 
 export function socialProviders(
   settings: OAuthSettings = {},
+  allowMissingEmail = false,
 ): BetterAuthOptions['socialProviders'] {
+  const missingEmail = (
+    provider: Provider,
+    profile: { email?: string | null; sub?: string; id?: string | number },
+  ) => {
+    if (profile.email) {
+      if (isIdentityEmail(profile.email))
+        return { email: '', emailVerified: false };
+      return {};
+    }
+    return allowMissingEmail
+      ? {
+          email: identityEmail(
+            provider,
+            settings[provider]!.clientId,
+            profile.sub ?? profile.id,
+          ),
+          emailVerified: false,
+        }
+      : {};
+  };
   return {
     ...settings,
+    ...(settings.google
+      ? {
+          google: {
+            ...settings.google,
+            mapProfileToUser: async (profile) =>
+              missingEmail('google', profile),
+          },
+        }
+      : {}),
+    ...(settings.apple
+      ? {
+          apple: {
+            ...settings.apple,
+            mapProfileToUser: async (profile) => missingEmail('apple', profile),
+          },
+        }
+      : {}),
     ...(settings.facebook
       ? {
           facebook: {
@@ -84,6 +123,7 @@ export function socialProviders(
             // Facebook's authenticated primary email is our proof, as in the old adapter.
             mapProfileToUser: async (profile) => ({
               emailVerified: !!profile.email,
+              ...missingEmail('facebook', profile),
             }),
           },
         }
@@ -133,7 +173,20 @@ export function socialProviders(
                   };
                 if (emails.length < 100) break;
               }
-              return null;
+              return allowMissingEmail
+                ? {
+                    user: {
+                      name: profile.name ?? profile.login ?? '',
+                      email: identityEmail(
+                        'github',
+                        settings.github!.clientId,
+                        profile.id,
+                      ),
+                      emailVerified: false,
+                    },
+                    data: profile,
+                  }
+                : null;
             },
           },
         }

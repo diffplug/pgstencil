@@ -104,6 +104,9 @@ importers:
       hono:
         specifier: ^4.13.7
         version: 4.13.7
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
       kysely:
         specifier: 0.29.5
         version: 0.29.5

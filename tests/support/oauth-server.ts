@@ -48,7 +48,8 @@ const jwk = {
 export const endpointPaths: Record<string, string> = {
   'https://login.microsoftonline.com/common/oauth2/v2.0/token':
     '/microsoft/token',
-  'https://login.microsoftonline.com/common/discovery/v2.0/keys': '/keys',
+  'https://login.microsoftonline.com/common/discovery/v2.0/keys':
+    '/microsoft/keys',
   'https://appleid.apple.com/.well-known/openid-configuration':
     '/apple/discovery',
   'https://appleid.apple.com/auth/token': '/apple/token',
@@ -128,6 +129,11 @@ export async function mockOAuthServer(
         });
       }
       if (url.pathname === '/keys') return json({ keys: [jwk] });
+      if (url.pathname === '/microsoft/keys') {
+        // Microsoft's real RSA signing keys omit the optional alg member.
+        const { alg: _alg, ...microsoftKey } = jwk;
+        return json({ keys: [microsoftKey] });
+      }
       if (url.pathname.endsWith('/token')) {
         const form = new URLSearchParams(body);
         const code = form.get('code') ?? '';

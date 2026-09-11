@@ -6,6 +6,7 @@ import {
 } from 'pgstencil/diagnostics';
 import type { BetterAuthOptions, BetterAuthPlugin } from 'better-auth';
 import { verifyProviderIdToken } from 'better-auth/oauth2';
+import { createRemoteJWKSet } from 'jose';
 import type { GithubProfile } from 'better-auth/social-providers';
 import { makeSignature } from 'better-auth/crypto';
 import { sql } from 'kysely';
@@ -66,6 +67,16 @@ export const verifiedOidc: BetterAuthPlugin = {
             : 'https://appleid.apple.com';
       if (provider.idToken && 'jwks' in provider.idToken) {
         provider.idToken.algorithms = ['RS256'];
+        if (provider.id === 'microsoft') {
+          // Microsoft omits JWK.alg. Better Auth 1.7.3 passes that missing value
+          // to importJWK, which throws. JOSE selects/imports the key using the
+          // protected header; the verifier still permits only RS256 above.
+          provider.idToken.jwks = createRemoteJWKSet(
+            new URL(
+              'https://login.microsoftonline.com/common/discovery/v2.0/keys',
+            ),
+          );
+        }
         if (typeof provider.idToken.jwks === 'function') {
           const keys = provider.idToken.jwks;
           provider.idToken.jwks = async (...args) => {

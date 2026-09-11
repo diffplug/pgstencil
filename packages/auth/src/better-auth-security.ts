@@ -63,6 +63,8 @@ export function protectAuth(
     return equal(signature, keyed(options.secret, 'csrf', token));
   };
   app.use('*', async (c, next) => {
+    await next();
+    // Apply to the final response, including upstream immutable redirects.
     c.header('Cache-Control', 'no-store');
     c.header('Referrer-Policy', 'no-referrer');
     c.header('X-Content-Type-Options', 'nosniff');
@@ -71,7 +73,6 @@ export function protectAuth(
       'Content-Security-Policy',
       "default-src 'none'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     );
-    await next();
   });
   app.use('/api/auth/*', bodyLimit({ maxSize: 16 * 1024 }));
   app.get('/api/auth/csrf', (c) => {

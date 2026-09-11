@@ -229,6 +229,11 @@ test('Better Auth OAuth: Apple form_post relay, wrong browser, mismatched provid
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: callback.searchParams,
   });
+  expect(relay.headers.get('referrer-policy')).toBe('no-referrer');
+  expect(relay.headers.get('cache-control')).toBe('no-store');
+  expect(relay.headers.get('content-security-policy')).toContain(
+    "frame-ancestors 'none'",
+  );
   const relayed = new URL(relay.headers.get('location')!);
   expect(relayed.origin + relayed.pathname).toBe(
     callback.origin + callback.pathname,

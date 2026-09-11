@@ -36,6 +36,8 @@ The workspace contains `pgstencil`, `@pgstencil/auth`, and `@pgstencil/stripe`. 
 
 Hono and Cloudflare Workers are supported through the shared Fetch adapter and request-scoped Hyperdrive connections. See [WORKERS.md](WORKERS.md) for the deployable example, local runtime tests, and deployment preparation.
 
+An isolated [Better Auth email experiment](examples/better-auth/README.md) explores replacing the custom auth layer while preserving deterministic parallel tests on Node and Workers. Run `pnpm dev:better-auth` for its local email-code demo or `pnpm test:better-auth` for its tests.
+
 ## Write a test
 
 The complete application fixture is in [tests/integration/helpers.ts](tests/integration/helpers.ts). A smaller consumer can use the infrastructure directly:

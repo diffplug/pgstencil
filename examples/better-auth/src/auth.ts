@@ -9,6 +9,7 @@ export function authOptions(options: {
   origin: string;
   secret: string;
   email: EmailSender;
+  ipAddressHeaders?: string[];
 }): BetterAuthOptions {
   return {
     appName: 'pgstencil Better Auth example',
@@ -17,7 +18,13 @@ export function authOptions(options: {
     database: { db: options.database, type: 'postgres', transaction: true },
     telemetry: { enabled: false },
     // Keep production security enabled under NODE_ENV=test as well.
-    advanced: { disableOriginCheck: false, disableCSRFCheck: false },
+    advanced: {
+      disableOriginCheck: false,
+      disableCSRFCheck: false,
+      ipAddress: {
+        ipAddressHeaders: options.ipAddressHeaders ?? ['x-pgstencil-client-ip'],
+      },
+    },
     // Workers are request-scoped; an in-memory limiter would reset every request.
     rateLimit: { enabled: true, storage: 'database' },
     session: {
@@ -53,6 +60,7 @@ export function createEmailApp(options: {
   origin: string;
   secret: string;
   email: EmailSender;
+  ipAddressHeaders?: string[];
 }) {
   const db = connectDatabase(options.databaseUrl);
   const auth = betterAuth(authOptions({ ...options, database: db }));

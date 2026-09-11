@@ -127,3 +127,10 @@ only after these Microsoft-specific verification checks pass.
 
 See [Microsoft's claim reference](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims-reference)
 and [Better Auth's provider setup](https://better-auth.com/docs/authentication/microsoft).
+
+Microsoft signing keys are loaded with JOSE's remote JWKS resolver because
+Microsoft's public RSA keys omit the optional `alg` member. Better Auth 1.7.3's
+Microsoft key importer requires that member and otherwise throws. pgstencil pins
+RS256 and the Microsoft key endpoint, retaining signature, nonce, audience, issuer,
+expiry and tenant/object identity checks. Local Microsoft fixtures also omit `alg`
+so this production key shape is exercised in Node and Workers tests.

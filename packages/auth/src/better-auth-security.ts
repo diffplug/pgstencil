@@ -95,7 +95,8 @@ export function protectAuth(
     const path = c.req.path.slice('/api/auth'.length);
     if (path === '/link-social' && options.accountLinking === 'same-email')
       return c.json({ message: 'Not found' }, 404);
-    const callback = /^\/callback\/(google|github|apple|facebook)$/.test(path);
+    const callback =
+      /^\/callback\/(google|github|apple|facebook|microsoft)$/.test(path);
     const reads = ['/get-session', '/list-accounts'];
     const writes = [
       '/email-otp/send-verification-otp',

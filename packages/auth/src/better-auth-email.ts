@@ -24,3 +24,21 @@ export function identityEmail(
       .digest('hex') + identityDomain
   );
 }
+
+/** Microsoft object IDs are tenant-scoped. Never substitute mutable email/UPN. */
+export function providerSubject(
+  provider: string,
+  profile: Record<string, unknown> | undefined,
+) {
+  if (provider !== 'microsoft') return profile?.sub ?? profile?.id;
+  const uuid =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (
+    typeof profile?.tid !== 'string' ||
+    !uuid.test(profile.tid) ||
+    typeof profile.oid !== 'string' ||
+    !uuid.test(profile.oid)
+  )
+    throw new Error('Invalid Microsoft identity');
+  return `${profile.tid.toLowerCase()}:${profile.oid.toLowerCase()}`;
+}

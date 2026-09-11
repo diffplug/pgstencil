@@ -4,37 +4,65 @@ import type { GithubProfile } from 'better-auth/social-providers';
 import { makeSignature } from 'better-auth/crypto';
 import { sql } from 'kysely';
 import { equal, keyed } from './better-auth-security.ts';
-import { identityEmail, isIdentityEmail } from './better-auth-email.ts';
+import {
+  identityEmail,
+  isIdentityEmail,
+  providerSubject,
+} from './better-auth-email.ts';
 import type { connectDatabase } from 'pgstencil/postgres';
 
-export const providers = ['google', 'apple', 'facebook', 'github'] as const;
+export const providers = [
+  'google',
+  'apple',
+  'facebook',
+  'github',
+  'microsoft',
+] as const;
 export type Provider = (typeof providers)[number];
 export type OAuthSettings = Partial<
   Record<Provider, { clientId: string; clientSecret: string }>
 >;
 
 /** Pin the redirect flow's OIDC checks explicitly on Better Auth 1.7.3.
- * Its Google/Apple provider metadata supports verification, but their default
+ * Its Google/Apple/Microsoft provider metadata supports verification, but their default
  * redirect getUserInfo only decodes claims. Use the library's actual verifier.
  */
 export const verifiedOidc: BetterAuthPlugin = {
   id: 'pgstencil-verified-oidc',
   init(context) {
     for (const provider of context.socialProviders) {
-      if (provider.id !== 'google' && provider.id !== 'apple') continue;
+      if (!['google', 'apple', 'microsoft'].includes(provider.id)) continue;
       provider.requiresIdTokenNonce = true;
-      provider.issuer =
-        provider.id === 'google'
-          ? 'https://accounts.google.com'
-          : 'https://appleid.apple.com';
+      if (provider.id !== 'microsoft')
+        provider.issuer =
+          provider.id === 'google'
+            ? 'https://accounts.google.com'
+            : 'https://appleid.apple.com';
       if (provider.idToken && 'jwks' in provider.idToken)
         provider.idToken.algorithms = ['RS256'];
+      if (provider.id === 'microsoft') {
+        provider.accountSubject = ({ profile }) =>
+          String(
+            providerSubject('microsoft', profile as Record<string, unknown>),
+          );
+        if (provider.idToken && 'jwks' in provider.idToken) {
+          const verifyClaims = provider.idToken.verifyClaims;
+          provider.idToken.verifyClaims = (claims) => {
+            try {
+              providerSubject('microsoft', claims);
+            } catch {
+              return false;
+            }
+            return verifyClaims?.(claims) === true;
+          };
+        }
+      }
       const authorization = provider.createAuthorizationURL.bind(provider);
       provider.createAuthorizationURL = async (data) => {
         if (!data.idTokenNonce) throw new Error('Missing OIDC nonce');
         const url = await authorization(data);
         url.searchParams.set('nonce', data.idTokenNonce);
-        if (provider.id === 'google')
+        if (provider.id === 'google' || provider.id === 'microsoft')
           url.searchParams.set('prompt', 'select_account');
         return url;
       };
@@ -78,7 +106,13 @@ export function socialProviders(
 ): BetterAuthOptions['socialProviders'] {
   const missingEmail = (
     provider: Provider,
-    profile: { email?: string | null; sub?: string; id?: string | number },
+    profile: {
+      email?: string | null;
+      sub?: string;
+      id?: string | number;
+      tid?: string;
+      oid?: string;
+    },
   ) => {
     if (profile.email) {
       if (isIdentityEmail(profile.email))
@@ -90,7 +124,7 @@ export function socialProviders(
           email: identityEmail(
             provider,
             settings[provider]!.clientId,
-            profile.sub ?? profile.id,
+            providerSubject(provider, profile),
           ),
           emailVerified: false,
         }
@@ -112,6 +146,49 @@ export function socialProviders(
           apple: {
             ...settings.apple,
             mapProfileToUser: async (profile) => missingEmail('apple', profile),
+          },
+        }
+      : {}),
+    ...(settings.microsoft
+      ? {
+          microsoft: {
+            ...settings.microsoft,
+            tenantId: 'common',
+            disableProfilePhoto: true,
+            disableDefaultScope: true,
+            scope: ['openid', 'profile', 'email'],
+            mapProfileToUser: async (profile) => {
+              const email = profile.email;
+              const verified =
+                profile.email_verified === true ||
+                profile.xms_edov === true ||
+                [
+                  profile.verified_primary_email,
+                  profile.verified_secondary_email,
+                ].some(
+                  (values) =>
+                    Array.isArray(values) &&
+                    values.some(
+                      (value) =>
+                        typeof value === 'string' &&
+                        value.toLowerCase() === email?.toLowerCase(),
+                    ),
+                );
+              // A tenant admin can edit ordinary email/UPN. Only verified claims may
+              // join an existing email account; otherwise allow provider-only signup.
+              return {
+                name:
+                  typeof profile.name === 'string'
+                    ? profile.name
+                    : 'Microsoft user',
+                email: verified ? (email ?? null) : null,
+                emailVerified: !!email && verified,
+                ...missingEmail('microsoft', {
+                  ...profile,
+                  email: verified ? (email ?? null) : null,
+                }),
+              };
+            },
           },
         }
       : {}),

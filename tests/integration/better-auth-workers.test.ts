@@ -13,7 +13,7 @@ import { queryDatabase } from '../../packages/pgstencil/src/postgres.ts';
 import {
   mockOAuthServer,
   endpointPaths,
-  allOAuthCredentials,
+  betterAuthCredentials as allOAuthCredentials,
 } from '../support/oauth-server.ts';
 import { providers } from '../../examples/better-auth/src/oauth.ts';
 

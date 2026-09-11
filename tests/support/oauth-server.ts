@@ -1,11 +1,11 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { createHash, createHmac, generateKeyPairSync, sign } from 'node:crypto';
+import type { OAuthFetch } from '../../examples/login/src/oauth-providers.ts';
 import type {
-  OAuthFetch,
   Provider,
   OAuthSettings,
-} from '../../examples/login/src/oauth-providers.ts';
+} from '../../packages/auth/src/better-auth-oauth.ts';
 
 export const allOAuthCredentials = {
   google: {
@@ -20,6 +20,14 @@ export const allOAuthCredentials = {
   github: {
     clientId: 'test-github-client',
     clientSecret: 'test-github-secret',
+  },
+} satisfies OAuthSettings;
+export const microsoftTenant = '9188040d-6c67-4c5b-b112-36a304b66dad';
+export const betterAuthCredentials = {
+  ...allOAuthCredentials,
+  microsoft: {
+    clientId: 'test-microsoft-client',
+    clientSecret: 'test-microsoft-secret',
   },
 } satisfies OAuthSettings;
 export const oauthCredentials = {
@@ -38,6 +46,9 @@ const jwk = {
   alg: 'RS256',
 };
 export const endpointPaths: Record<string, string> = {
+  'https://login.microsoftonline.com/common/oauth2/v2.0/token':
+    '/microsoft/token',
+  'https://login.microsoftonline.com/common/discovery/v2.0/keys': '/keys',
   'https://appleid.apple.com/.well-known/openid-configuration':
     '/apple/discovery',
   'https://appleid.apple.com/auth/token': '/apple/token',
@@ -123,7 +134,7 @@ export async function mockOAuthServer(
         const grant = grants.get(code);
         grants.delete(code);
         if (!grant) return json({ error: 'invalid_grant' }, 400);
-        const credentials = allOAuthCredentials[grant.provider];
+        const credentials = betterAuthCredentials[grant.provider];
         const challenge = createHash('sha256')
           .update(form.get('code_verifier') ?? '')
           .digest('base64url');
@@ -163,7 +174,7 @@ export async function mockOAuthServer(
               : 'read:user,user:email',
         };
         if (
-          (grant.provider === 'google' || grant.provider === 'apple') &&
+          ['google', 'apple', 'microsoft'].includes(grant.provider) &&
           !grant.options.missingIdToken
         ) {
           const now = Math.floor(
@@ -181,6 +192,19 @@ export async function mockOAuthServer(
             nonce: grant.authorization.searchParams.get('nonce'),
             iat: now,
             exp: now + 3600,
+            ...(grant.provider === 'microsoft'
+              ? {
+                  iss: `https://login.microsoftonline.com/${microsoftTenant}/v2.0`,
+                  tid: microsoftTenant,
+                  oid:
+                    grant.options.subject ??
+                    '11111111-1111-4111-8111-111111111111',
+                  name: 'Mock Microsoft',
+                  // Real Microsoft tokens typically use optional xms_edov, not email_verified.
+                  email_verified: undefined,
+                  xms_edov: grant.options.verified ?? true,
+                }
+              : {}),
             ...grant.options.claims,
           };
           const unsigned = [

@@ -1,6 +1,6 @@
 # Better Auth with pgstencil
 
-Better Auth 1.7.3 handles email-code login and Google, Apple, Facebook and GitHub
+Better Auth 1.7.3 handles email-code login and Google, Apple, Facebook, GitHub and Microsoft
 OAuth. pgstencil owns SQL migrations, Docker/IntegreSQL clones, email capture,
 security policy and deterministic tests. The reusable exports live in `@pgstencil/auth`; see [package consumption](../../PACKAGES.md#better-auth-integration). This example is isolated from the old
 auth implementation and from TTR production.
@@ -53,7 +53,7 @@ and/or `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` in the process environment.
   replay claim. Apple form_post relays to a GET that receives the Lax cookies.
   Callback destinations are fixed to the application origin. Direct provider-token
   sign-in and unused upstream auth endpoints are unavailable.
-- The pinned version's Google/Apple redirect profile readers only decode ID tokens.
+- The pinned version's Google/Apple/Microsoft redirect profile readers only decode ID tokens.
   `verifiedOidc` explicitly enables Better Auth's signature/issuer/audience/expiry/
   nonce verification through its plugin API. Negative tests cover each check.
   GitHub requires a verified primary email; Facebook uses the authenticated email
@@ -71,7 +71,7 @@ and outbound fetch facades use AsyncLocalStorage to select each app's clock,
 random stream and local provider server. They do not replace process globals,
 cryptographic hashing/signing or timers. Normal builds have no injection or test
 clock routes. Repeatable email/OAuth cookies, sessions and timestamps are tested
-across parallel apps; all four providers also run through real workerd.
+across parallel apps; all five providers also run through real workerd.
 
 This adapter covers these APIs in the bundled dependency graph. Dependency
 upgrades must rerun security and snapshot tests. The same request order is
@@ -106,3 +106,24 @@ Enter secrets directly into deployment tooling, not chat, source files or logs.
 Do not delete Supabase/Pages until email and each required provider pass in a real
 browser. The TTR test must also confirm that a second device's login signs out
 the first, and that its chosen linking policy preserves account IDs across login methods.
+
+## Microsoft
+
+The Better Auth adapter supports personal and work/school Microsoft accounts at
+`https://login.microsoftonline.com/common`. Configure `MICROSOFT_CLIENT_ID` and
+`MICROSOFT_CLIENT_SECRET`, with a Web redirect URI of
+`https://<origin>/api/auth/callback/microsoft`. It requests only OpenID, profile,
+and email scopes; there is no Graph photo request or offline access.
+
+Signatures, audience, expiration, nonce and the tenant-specific issuer are checked
+before reading claims. Stable identities include both `tid` and `oid`.
+An email can join an existing account only with `email_verified: true`,
+`xms_edov: true`, or membership in the verified email claims. Ordinary `email`
+and `preferred_username` are insufficient. Request `email` and `xms_edov` as
+optional ID-token claims in the app registration. With `allowMissingEmail`,
+missing/unverified email becomes a provider-only account without a code prompt.
+`trustedEmailProviders: ['microsoft']` bypasses the additional local mailbox proof
+only after these Microsoft-specific verification checks pass.
+
+See [Microsoft's claim reference](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims-reference)
+and [Better Auth's provider setup](https://better-auth.com/docs/authentication/microsoft).

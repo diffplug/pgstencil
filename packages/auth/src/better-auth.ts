@@ -19,7 +19,11 @@ import {
   type Provider,
 } from './better-auth-oauth.ts';
 
-import { identityEmail, isIdentityEmail } from './better-auth-email.ts';
+import {
+  identityEmail,
+  isIdentityEmail,
+  providerSubject,
+} from './better-auth-email.ts';
 
 export interface AuthOptions {
   database: ReturnType<typeof connectDatabase>;
@@ -83,7 +87,7 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
               identityEmail(
                 provider,
                 options.oauth[provider].clientId,
-                profile?.sub ?? profile?.id,
+                providerSubject(provider, profile),
               )
           )
             return;

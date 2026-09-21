@@ -24,11 +24,18 @@
     "./better-auth-workers": "./src/better-auth-workers.ts"
   },
   "dependencies": {
-    "better-auth": "1.7.3",
+    "better-auth": "~1.7.3",
+    "jose": "^6.2.12",
+    "openid-client": "^6.8.8"
+  },
+  "peerDependencies": {
     "hono": "^4.13.7",
-    "jose": "6.2.12",
-    "kysely": "0.29.5",
-    "openid-client": "6.8.8",
+    "kysely": "^0.29.5",
+    "pgstencil": "workspace:^"
+  },
+  "devDependencies": {
+    "hono": "^4.13.7",
+    "kysely": "^0.29.5",
     "pgstencil": "workspace:*"
   },
   "engines": {

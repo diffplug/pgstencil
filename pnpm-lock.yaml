@@ -63,7 +63,7 @@ importers:
         specifier: ^4.13.7
         version: 4.13.7
       kysely:
-        specifier: 0.29.5
+        specifier: ^0.29.5
         version: 0.29.5
       pg:
         specifier: ^8.16.0
@@ -80,8 +80,11 @@ importers:
       '@pgstencil/stripe':
         specifier: workspace:*
         version: link:../../packages/stripe
+      hono:
+        specifier: ^4.13.7
+        version: 4.13.7
       kysely:
-        specifier: 0.29.5
+        specifier: ^0.29.5
         version: 0.29.5
       pg:
         specifier: ^8.16.0
@@ -89,30 +92,43 @@ importers:
       pgstencil:
         specifier: workspace:*
         version: link:../../packages/pgstencil
+      stripe:
+        specifier: ^22.6.1
+        version: 22.6.1(@types/node@24.13.3)
 
   examples/workers:
     dependencies:
       '@pgstencil/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      hono:
+        specifier: ^4.13.7
+        version: 4.13.7
+      kysely:
+        specifier: ^0.29.5
+        version: 0.29.5
+      pgstencil:
+        specifier: workspace:*
+        version: link:../../packages/pgstencil
 
   packages/auth:
     dependencies:
       better-auth:
-        specifier: 1.7.3
+        specifier: ~1.7.3
         version: 1.7.3(pg@8.23.0)(vitest@4.1.11(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))
+      jose:
+        specifier: ^6.2.12
+        version: 6.2.12
+      openid-client:
+        specifier: ^6.8.8
+        version: 6.8.8
+    devDependencies:
       hono:
         specifier: ^4.13.7
         version: 4.13.7
-      jose:
-        specifier: 6.2.12
-        version: 6.2.12
       kysely:
-        specifier: 0.29.5
+        specifier: ^0.29.5
         version: 0.29.5
-      openid-client:
-        specifier: 6.8.8
-        version: 6.8.8
       pgstencil:
         specifier: workspace:*
         version: link:../pgstencil
@@ -122,32 +138,33 @@ importers:
       cheerio:
         specifier: ^1.1.0
         version: 1.2.0
-      kysely:
-        specifier: 0.29.5
-        version: 0.29.5
       node-pg-migrate:
-        specifier: 9.0.0
+        specifier: ^9.0.0
         version: 9.0.0(@types/pg@8.23.1)(pg@8.23.0)
       pg:
         specifier: ^8.16.0
         version: 8.23.0
       testcontainers:
-        specifier: 12.1.0
+        specifier: ^12.1.0
         version: 12.1.0
       turndown:
         specifier: ^7.2.0
         version: 7.2.4
+    devDependencies:
+      kysely:
+        specifier: ^0.29.5
+        version: 0.29.5
 
   packages/stripe:
-    dependencies:
+    devDependencies:
       kysely:
-        specifier: 0.29.5
+        specifier: ^0.29.5
         version: 0.29.5
       pgstencil:
         specifier: workspace:*
         version: link:../pgstencil
       stripe:
-        specifier: 22.6.1
+        specifier: ^22.6.1
         version: 22.6.1(@types/node@24.13.3)
 
 packages:

@@ -4,3 +4,9 @@ packages:
 onlyBuiltDependencies:
   - esbuild
   - workerd
+
+# Ignore package versions published less than 1 day (1440 min) ago, so a
+# freshly published (possibly compromised or broken) release cannot enter an
+# install before it has had time to be caught. Mirrors the Renovate
+# minimumReleaseAge gating in .github/renovate.json.
+minimumReleaseAge: 1440

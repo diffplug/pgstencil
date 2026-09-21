@@ -4,9 +4,15 @@ Three packages share version 0.1.0: `pgstencil` (infrastructure and test primiti
 
 Run `pnpm packages:pack` to produce the three archives in `dist/packages`. They contain ESM JavaScript, TypeScript declarations, the MIT license, and required SQL/Compose assets. Workspace development uses source exports; packing switches the exports to compiled files. Nothing runs migrations during install.
 
-Copy the tarballs to a consumer's `vendor/` directory, depend on them using `file:` paths, and override all three package names to those same paths in the consumer's pnpm configuration. The override for `pgstencil` ensures auth and billing's transitive dependency also resolves locally. Commit the archives and lockfile together for a reproducible temporary distribution. Once public npm is configured, replace these paths with exact registry versions and remove the overrides.
+Copy the tarballs to a consumer's `vendor/` directory, depend on them using `file:` paths, and override all three package names to those same paths in the consumer's pnpm configuration. The override for `pgstencil` ensures auth and billing's peer also resolves locally. Pack a committed revision in a clean checkout, because an untracked file under `migrations` would otherwise ship in the archive. Commit the archives and lockfile together for a reproducible temporary distribution. Once public npm is configured, replace these paths with exact registry versions and remove the overrides.
 
-`pnpm packages:verify` builds, packs, installs into an unrelated temporary pnpm project, checks TypeScript declarations, and runs an email login and required-card trial against a real cloned database. It shares this repository's Docker service state, but loads all code and SQL from installed archives. The consumer directory is printed for inspection.
+`pnpm packages:verify` builds, packs, installs into an unrelated temporary pnpm project, checks TypeScript declarations, and runs an email login and required-card trial against a real cloned database. The project declares each peer at the version this workspace tests, and fails on an unmet peer. It shares this repository's Docker service state, but loads all code and SQL from installed archives. The consumer directory is printed for inspection.
+
+## Dependencies
+
+Applications declare pgstencil's peer dependencies themselves: `kysely` for every package, `hono` for `@pgstencil/auth`, and `stripe` for `@pgstencil/stripe`. Auth and billing also peer on the `pgstencil` released with them. A library is a peer when the application and pgstencil must share one copy. Either objects cross the boundary, or the library holds module-level state. Kysely and Hono classes have private fields, so two copies are incompatible types. `pgstencil/diagnostics` keeps its request scope in `AsyncLocalStorage`. The application's Renovate updates each shared library once, and pgstencil uses that copy. pnpm reports a release outside a peer range; pgstencil must widen the range first.
+
+Every other dependency is private: pgstencil owns its version and applications do not import it. Better Auth is deliberately private. pgstencil imports its internal subpaths and tests login and linking rules against specific releases, so its range admits patches only. A new login provider or Better Auth plugin belongs in `@pgstencil/auth`, not in an application. Private ranges start at the version pgstencil's CI tested. [`.github/renovate.json`](.github/renovate.json) raises that floor, and re-vendoring carries it into each application.
 
 ## Application composition
 

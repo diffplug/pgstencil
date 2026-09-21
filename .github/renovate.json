@@ -1,0 +1,91 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "enabledManagers": ["github-actions", "npm"],
+  "dependencyDashboard": true,
+  "timezone": "America/Los_Angeles",
+  "schedule": ["* * * * 1"],
+  "vulnerabilityAlerts": {
+    "description": [
+      "Security fixes must not wait for the Monday window, so this overrides the schedule only.",
+      "`minimumReleaseAge` is set here EXPLICITLY. Renovate force-applies `minimumReleaseAge: null` to this block, so omitting it drops the cooldown instead of inheriting it from packageRules. The cooldown guards against a compromised release that gets yanked within a day."
+    ],
+    "enabled": true,
+    "schedule": [],
+    "minimumReleaseAge": "1 day",
+    "labels": ["security", "dependencies"]
+  },
+  "packageRules": [
+    {
+      "description": "Tooling and examples track new releases in the lockfile without rewriting their ranges",
+      "matchManagers": ["npm"],
+      "rangeStrategy": "update-lockfile"
+    },
+    {
+      "description": "A published package's private dependency range starts at the version CI tested, so re-vendoring or publishing carries that floor into every app (PACKAGES.md -> Dependencies)",
+      "matchManagers": ["npm"],
+      "matchFileNames": ["packages/*/package.json"],
+      "matchDepTypes": ["dependencies"],
+      "rangeStrategy": "bump"
+    },
+    {
+      "description": "Apps own their peer versions. An in-range release only moves the devDependency copy that CI tests; an out-of-range release widens the peer so apps can upgrade on their own schedule (PACKAGES.md -> Dependencies)",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["peerDependencies"],
+      "rangeStrategy": "widen"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions",
+      "groupSlug": "github-actions",
+      "separateMajorMinor": false
+    },
+    {
+      "description": "Require explicit approval for npm majors so API and runtime compatibility get a human review before a branch is created",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "kysely-codegen peers on kysely; generated declarations and the query builder move together",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["kysely", "kysely-codegen"],
+      "groupName": "kysely",
+      "groupSlug": "kysely",
+      "separateMajorMinor": false
+    },
+    {
+      "description": "The @hono adapters peer on hono",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["hono", "@hono/**"],
+      "groupName": "hono",
+      "groupSlug": "hono",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["patch"],
+      "minimumReleaseAge": "1 day"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor"],
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"],
+      "minimumReleaseAge": "14 days"
+    },
+    {
+      "description": "@types/node must not expose APIs newer than the Node major in .nvmrc and CI",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["@types/node"],
+      "allowedVersions": ">=24 <25"
+    },
+    {
+      "description": "Node is governed by engines, .nvmrc and the CI setup-node version, and is bumped by hand",
+      "matchPackageNames": ["node"],
+      "enabled": false
+    }
+  ]
+}

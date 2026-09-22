@@ -29,6 +29,12 @@ jobs:
   security-audit:
     name: security-audit
     runs-on: ubuntu-latest
+    # CLAUDE_CODE_OAUTH_TOKEN lives in this environment, not at repository
+    # scope. Its deployment-branch policy admits only `main`, which the
+    # `Protect main` ruleset reserves to pull requests, so a workflow pushed
+    # on any other branch, or a dispatch from one, never receives the token.
+    environment:
+      name: security-audit
     # Generous: the audit runs the integration suite against real Postgres
     # containers as evidence, then reads the auth package adversarially.
     timeout-minutes: 40

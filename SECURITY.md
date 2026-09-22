@@ -76,6 +76,7 @@ Pinned by `pnpm packages:verify` in `.github/workflows/check.yml`.
 
 - **FAIL IF** `.github/workflows/check.yml` stops running `db:verify`, `test:scripts`, `test` and `packages:verify` on pushes to `main` and on every pull request, drops `persist-credentials: false`, or grants any permission beyond `contents: read`; inspect `.github/workflows/check.yml`.
 - **FAIL IF** `.github/workflows/security-audit.yml` is missing or disabled, loses its `push` to `main` trigger or its `security-audit` job name — a consumer reads that check run by name — lets the reporting step treat anything but an exact `VERDICT: PASS` line above a `<!-- END OF REPORT -->` sentinel as passing, or drops the step that redacts secrets from the report and the transcript; inspect `.github/workflows/security-audit.yml`.
+- **FAIL IF** the audit job stops declaring `environment: security-audit`, that environment's deployment-branch policy admits any ref but `main` (`gh api repos/diffplug/pgstencil/environments/security-audit/deployment-branch-policies`), or the ruleset on `main` stops requiring a pull request or blocking force-push and deletion (`gh api repos/diffplug/pgstencil/rules/branches/main`); the environment is what keeps `CLAUDE_CODE_OAUTH_TOKEN` from a workflow pushed on any other branch.
 
 Pinned by `pnpm test:scripts`, which runs the shipped reporting and redaction shell rather than a copy: `scripts/security-audit.test.mjs`.
 

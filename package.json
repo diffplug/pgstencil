@@ -13,11 +13,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
+    "test:scripts": "node --test scripts/*.test.mjs",
     "snapshot:update": "node --import tsx scripts/update-snapshots.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "pnpm format:check && pnpm typecheck && pnpm test",
+    "check": "pnpm format:check && pnpm typecheck && pnpm test:scripts && pnpm test",
     "db:status": "tsx scripts/db.ts status",
     "db:validate": "tsx scripts/db.ts validate",
     "db:migrate": "tsx scripts/db.ts migrate",
@@ -29,7 +30,7 @@
     "db:stop": "tsx scripts/db.ts stop",
     "db:gc": "tsx scripts/db.ts gc",
     "packages:build": "node --import tsx scripts/build-packages.ts",
-    "packages:pack": "pnpm packages:build && pnpm --filter pgstencil --filter @pgstencil/auth --filter @pgstencil/stripe -r pack --pack-destination dist/packages",
+    "packages:pack": "node --import tsx scripts/pack-packages.ts",
     "packages:verify": "pnpm packages:pack && node --import tsx scripts/verify-packages.ts"
   },
   "devDependencies": {

@@ -25,6 +25,7 @@ jobs:
       - run: pnpm format:check
       - run: pnpm db:verify
       - run: pnpm typecheck
+      - run: pnpm test:scripts
       - run: pnpm test
       - run: pnpm --filter @pgstencil/example-workers build
       - run: pnpm packages:verify

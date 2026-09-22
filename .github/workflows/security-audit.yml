@@ -1,0 +1,352 @@
+name: security-audit
+
+# Audits this repository against SECURITY.md: every `FAIL IF` run as a
+# mechanical check with evidence, then an adversarial read of the code behind
+# them. One agent, one domain, one report — there is nothing to orchestrate.
+#
+# The `push` trigger is load-bearing, not convenience. A consumer that vendors a
+# packed tarball verifies the commit it vendored by reading this job's check run
+# on that commit (`gh api repos/diffplug/pgstencil/commits/<sha>/check-runs`),
+# so the job id and its `name:` are both exactly `security-audit`. Renaming
+# either one silently breaks every consumer's verification.
+
+on:
+  schedule:
+    - cron: '51 4 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+# No `concurrency` block. A superseded commit on `main` still needs its own
+# verdict, because the check run a consumer reads is per commit.
+
+permissions:
+  contents: read # checkout
+  actions: read # deep-link this run's transcript artifact from the issue
+  issues: write # file, append to and close the failure issue
+
+jobs:
+  security-audit:
+    name: security-audit
+    runs-on: ubuntu-latest
+    # CLAUDE_CODE_OAUTH_TOKEN lives in this environment, not at repository
+    # scope. Its deployment-branch policy admits only `main`, which the
+    # `Protect main` ruleset reserves to pull requests, so a workflow pushed
+    # on any other branch, or a dispatch from one, never receives the token.
+    environment:
+      name: security-audit
+    # Generous: the audit runs the integration suite against real Postgres
+    # containers as evidence, then reads the auth package adversarially.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Before the audit, not after: without the secret the agent never starts,
+      # and the reporting step below would otherwise file an issue that says
+      # only "no report". Writes a readable report instead of failing bare, so
+      # the issue names the missing secret.
+      - name: Verify CLAUDE_CODE_OAUTH_TOKEN is provisioned
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && exit 0
+          # The backticks below are Markdown for the issue body, not command
+          # substitution.
+          # shellcheck disable=SC2016
+          {
+            echo 'VERDICT: INCONCLUSIVE'
+            echo
+            echo 'The audit never ran: `CLAUDE_CODE_OAUTH_TOKEN` is not set as a repository secret.'
+            echo 'Add it under Settings -> Secrets and variables -> Actions, then re-run this workflow.'
+            echo
+            echo '<!-- END OF REPORT -->'
+          } > audit-report.md
+          echo "::error::CLAUDE_CODE_OAUTH_TOKEN is not set; the audit cannot run."
+          exit 1
+
+      # Claude Code is invoked directly rather than through
+      # `anthropics/claude-code-action`, which cannot run on this workflow's
+      # load-bearing trigger: its `parseGitHubContext` switch has cases for
+      # `workflow_dispatch`, `repository_dispatch`, `schedule` and
+      # `workflow_run` only, and throws `Unsupported event type: push` on
+      # everything else. A step-level `GITHUB_EVENT_NAME` override does not
+      # help — the runner writes the real `GITHUB_*` values over a step's `env:`
+      # after evaluating it (actions/runner, `ScriptHandler.cs` -> "expose
+      # context to environment"). Invoking the CLI keeps the per-commit check
+      # run, and has the side benefit that CI and
+      # `scripts/security-audit-local.sh` run the same binary over the same
+      # prompt files, so they cannot drift.
+      #
+      # The version is pinned, and is the one the action installs the same way.
+      # The prompt is a pointer, never a copy: the content lives in
+      # `.github/audit/` so CI and the local runner cannot disagree.
+      - name: Audit against SECURITY.md
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_VERSION: 2.1.278
+          # Process-wide cap on a single Bash call. The default is two minutes —
+          # under the integration suite's runtime — and a call that hits the cap
+          # is moved to the background, so the agent would read a truncated
+          # result as the evidence for a `FAIL IF`.
+          BASH_DEFAULT_TIMEOUT_MS: '600000'
+        run: |
+          set -eo pipefail
+          curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLAUDE_CODE_VERSION"
+          export PATH="$HOME/.local/bin:$PATH"
+
+          # stdout is the transcript, not the log. The archive step publishes it
+          # after redaction; a public step log would carry raw `tool_result`
+          # bodies with no redaction pass in front of them.
+          #
+          # A nonzero exit is an annotation, not the verdict. The verdict is the
+          # report's own first line and its sentinel — an agent killed mid-run
+          # leaves no sentinel, which the reporting step reads as INCONCLUSIVE,
+          # and that is the failure mode the sentinel exists to catch.
+          # The backticks are Markdown in the prompt, not command substitution.
+          # shellcheck disable=SC2016
+          claude -p 'Read `.github/audit/_preamble.md` and then `.github/audit/security.md`, and follow them exactly.' \
+            --model opus \
+            --allowed-tools "Read,Write,Edit,Bash,Grep,Glob" \
+            --disallowed-tools "Task,Agent,Workflow" \
+            --verbose --output-format stream-json \
+            > "$RUNNER_TEMP/claude-execution-output.json" \
+            || echo "::error::claude exited nonzero; the report below is whatever it had written."
+
+      # Both sinks, not just the archive. `audit-report.md` is `cat` into a
+      # public issue, which outlives the artifact's 14 days, is indexed, and is
+      # emailed to subscribers — and the preamble asks for evidence as "command
+      # output", so it invites exactly the paste this guards against.
+      #
+      # Fail closed. `Archive audit transcript` below is `if: always()` and does
+      # not depend on this step's outcome, so a throwing redactor would
+      # otherwise ship the raw files: on any error, delete every sink instead.
+      # Deleted rather than truncated — `: >` has to open the file and so fails
+      # on exactly the unreadable file that made the redactor throw, whereas
+      # `rm` needs only the directory. A nonzero count is not routine; it means
+      # a secret reached a file in cleartext, so it surfaces as an annotation
+      # and the right response is to rotate.
+      #
+      # Keep every shell comment outside the single-quoted script — inside it,
+      # Node parses it as JavaScript and the step fails closed on every run,
+      # which `bash -n` does not catch.
+      - name: Redact secrets from agent output
+        if: always()
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          TRANSCRIPT="$RUNNER_TEMP/claude-execution-output.json"
+          node -e '
+            const fs = require("fs");
+            let hits = 0;
+            for (const p of process.argv.slice(1)) {
+              if (!fs.existsSync(p)) continue;
+              let s = fs.readFileSync(p, "utf8");
+              for (const name of ["CLAUDE_CODE_OAUTH_TOKEN"]) {
+                const v = process.env[name];
+                if (!v || v.length < 8) continue;
+                const parts = s.split(v);
+                hits += parts.length - 1;
+                s = parts.join("***");
+              }
+              fs.writeFileSync(p, s);
+            }
+            if (hits > 0) {
+              console.log("::warning::Redacted " + hits + " literal secret occurrence(s) from agent output. A secret reached a file in cleartext — rotate CLAUDE_CODE_OAUTH_TOKEN.");
+            } else {
+              console.log("No literal secret occurrences found.");
+            }
+          ' "$TRANSCRIPT" audit-report.md \
+            || { rm -f "$TRANSCRIPT" audit-report.md; exit 1; }
+
+      # The transcript is the only record of what the audit actually did: its
+      # stdout never reaches the step log, and the runner is ephemeral. Uploaded
+      # unconditionally — a PASS transcript is the baseline you compare a bad
+      # one against. This repository is public, so the artifact is world
+      # readable; that is consistent with the reports already posted to public
+      # issues, and is why the redaction step above runs first.
+      #
+      # `if-no-files-found: warn` is load-bearing: a run that died before the
+      # agent started leaves neither file, and that must not fail the upload.
+      - name: Archive audit transcript
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: audit-transcript
+          path: |
+            ${{ runner.temp }}/claude-execution-output.json
+            audit-report.md
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Surface result, file or close issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eo pipefail
+
+          # Three outcomes, not two. PASS and FAIL are verdicts the audit
+          # reached; INCONCLUSIVE means it never reached one. Collapsing the
+          # third into FAIL files an identical issue for "this repository is
+          # insecure" and "the auditor stopped early", leaving no way to tell a
+          # real finding from a no-op run. It still exits non-zero and still
+          # files under the same label, so a later PASS closes it.
+
+          # What the *file* said, parsed once and never mutated. Every note
+          # below is written about a condition rather than about a branch.
+          REPORT=audit-report.md
+          FINISHED=no
+          if [ -s "$REPORT" ]; then
+            # Exact match on the two arms that can be read as complete; a
+            # failure with an appended explanation is still a finding, so only
+            # FAIL matches as a prefix.
+            case "$(head -n1 "$REPORT")" in
+              'VERDICT: PASS') FILE_VERDICT=PASS ;;
+              'VERDICT: FAIL'*) FILE_VERDICT=FAIL ;;
+              'VERDICT: INCONCLUSIVE') FILE_VERDICT=INCONCLUSIVE ;;
+              *) FILE_VERDICT=UNREADABLE ;;
+            esac
+            # A verdict line is not a finished report. The agent appends
+            # findings as it determines them and writes the sentinel last, so a
+            # report without one belongs to a run that was cut off — and its
+            # first line may already have been rewritten to `VERDICT: PASS` in
+            # the moment before it died. Last non-blank line, not `tail -n1`: a
+            # trailing blank line after the sentinel still ends a report.
+            if [ "$(sed -e '/^[[:space:]]*$/d' "$REPORT" | tail -n1)" = "<!-- END OF REPORT -->" ]; then
+              FINISHED=yes
+            fi
+          else
+            FILE_VERDICT=MISSING
+          fi
+
+          # Escalation, in ONE place, from what was parsed above. PASS is the
+          # only arm that has to be earned: an exact verdict line *and* a
+          # finished report. Everything else that is not an outright finding is
+          # inconclusive.
+          if [ "$FILE_VERDICT" = "FAIL" ]; then
+            STATUS=FAIL
+          elif [ "$FILE_VERDICT" = "PASS" ] && [ "$FINISHED" = "yes" ]; then
+            STATUS=PASS
+          else
+            STATUS=INCONCLUSIVE
+          fi
+
+          DATE=$(date -u +%Y-%m-%dT%H:%MZ)
+          RUN_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          # Idempotent label creation; ignore "already exists" errors.
+          gh label create security-audit-failure \
+            --color B60205 --description "Security audit failure" 2>/dev/null || true
+
+          if [ "$STATUS" = "PASS" ]; then
+            # Auto-close any open audit-failure issues so the tracker reflects
+            # the live state.
+            for n in $(gh issue list --label security-audit-failure \
+                         --state open --json number --jq '.[].number'); do
+              gh issue close "$n" --comment "Audit passed at $DATE. [Run]($RUN_URL)"
+            done
+            echo "Audit passed."
+            exit 0
+          fi
+
+          # Deep-link the transcript so the issue points at the evidence rather
+          # than at a run page the reader has to dig through. The id lookup
+          # needs `actions: read`, which this job holds. Left empty when there
+          # is no artifact — a run cancelled on `timeout-minutes` never writes
+          # one, and those are exactly the runs a link to the run page would
+          # dead-end on, so both consumers below are gated rather than falling
+          # back.
+          ART_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+                     --jq '.artifacts[] | select(.name == "audit-transcript") | .id' \
+                     2>/dev/null | head -n1 || true)
+          if [ -n "$ART_ID" ]; then
+            TRANSCRIPT_URL="$RUN_URL/artifacts/$ART_ID"
+          else
+            TRANSCRIPT_URL=""
+          fi
+
+          # One note per condition that HOLDS, never one block per combination
+          # of conditions. Prose proportional to combinations cannot be kept
+          # correct by patching combinations: each time a gate widens, new
+          # combinations become reachable and the arm that catches them
+          # describes a different failure. Adding a fifth condition later means
+          # adding one note, and it cannot make any existing note wrong, because
+          # no note claims anything about the others.
+          NOTES=$(mktemp)
+          if [ "$FILE_VERDICT" = "MISSING" ]; then
+            echo "::warning::No audit-report.md was produced."
+            echo "- **The audit produced no report.** \`audit-report.md\` was absent or empty, so the run ended before writing anything. The redactor deletes the report and the transcript when it throws; check that step's result as well as this run's \`audit-transcript\` artifact." >> "$NOTES"
+          fi
+          if [ "$FILE_VERDICT" = "UNREADABLE" ]; then
+            echo "::warning::audit-report.md has no VERDICT line."
+            echo "- **The audit's verdict could not be read.** The first line of \`audit-report.md\` is not an exact \`VERDICT: PASS\`, \`VERDICT: FAIL\`, or \`VERDICT: INCONCLUSIVE\`. The run did report; its verdict is unconfirmed." >> "$NOTES"
+          fi
+          if [ "$FILE_VERDICT" = "INCONCLUSIVE" ]; then
+            echo "::warning::The audit could not determine every check."
+            echo "- **The audit could not determine every check.** Read its \`UNVERIFIABLE\` lines; each names a check that was reached but not determined, and those do not count as passing." >> "$NOTES"
+          fi
+          if [ "$FILE_VERDICT" != "MISSING" ] && [ "$FINISHED" != "yes" ]; then
+            echo "::warning::audit-report.md has no completion sentinel; the audit was cut off mid-report."
+            echo "- **The audit was cut off mid-report.** It never wrote its \`<!-- END OF REPORT -->\` sentinel, so what follows is what it had recorded when it stopped, and its verdict line covers less than it appears to. The findings it did write are still findings." >> "$NOTES"
+          fi
+
+          if [ "$STATUS" = "FAIL" ]; then
+            TITLE="[security-audit] FAIL on $(date -u +%Y-%m-%d)"
+            HEADLINE="Audit failed at $DATE."
+          else
+            TITLE="[security-audit] INCONCLUSIVE on $(date -u +%Y-%m-%d)"
+            HEADLINE="Audit reached no usable verdict at $DATE. This is not a security finding: the run ended without deciding."
+          fi
+
+          {
+            LINKS="[Run]($RUN_URL)"
+            [ -n "$TRANSCRIPT_URL" ] && LINKS="$LINKS · [Transcript]($TRANSCRIPT_URL)"
+            echo "$HEADLINE $LINKS"
+            echo
+            if [ -s "$NOTES" ]; then
+              cat "$NOTES"
+              echo
+            fi
+            if [ -s "$REPORT" ]; then
+              cat "$REPORT"
+            fi
+          } > audit-comment.md
+          rm -f "$NOTES"
+
+          # Truncate before posting, non-fatally: GitHub rejects an over-long
+          # body outright, which loses the whole finding.
+          node scripts/clamp-issue-body.mjs audit-comment.md \
+            --note "The untruncated \`audit-report.md\` is in this run's \`audit-transcript\` artifact${TRANSCRIPT_URL:+ ([download]($TRANSCRIPT_URL))}." \
+            || echo "clamp-issue-body.mjs failed; posting audit-comment.md unclamped." >&2
+
+          EXISTING=$(gh issue list --label security-audit-failure \
+                       --state open --json number --jq '.[0].number' || true)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file audit-comment.md
+            # Upward only. FAIL is the ceiling: an inconclusive run must not
+            # relabel an issue that already carries real findings, and the title
+            # never needs walking back down because a PASS closes the issue
+            # outright.
+            if [ "$STATUS" = "FAIL" ]; then
+              gh issue edit "$EXISTING" --title "$TITLE"
+            fi
+            echo "Appended $STATUS to issue #$EXISTING"
+          else
+            gh issue create \
+              --title "$TITLE" \
+              --label security-audit-failure \
+              --body-file audit-comment.md
+          fi
+          exit 1

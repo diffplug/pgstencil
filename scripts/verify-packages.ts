@@ -143,6 +143,24 @@ execFileSync('pnpm', ['install', '--ignore-scripts'], {
   cwd: directory,
   stdio: 'inherit',
 });
+// A consumer proves which source it runs from this file alone; prove it here too.
+const head = execFileSync('git', ['rev-parse', 'HEAD'], {
+  cwd: projectRoot,
+  encoding: 'utf8',
+}).trim();
+for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
+  const file = join(directory, 'node_modules', name, 'dist/provenance.json');
+  const provenance = JSON.parse(await readFile(file, 'utf8')) as {
+    commit?: string;
+    dirty?: boolean;
+  };
+  if (provenance.commit !== head)
+    throw new Error(
+      `${name} was packed from ${provenance.commit}, not ${head} (${file})`,
+    );
+  if (provenance.dirty)
+    throw new Error(`${name} was packed from a modified tree (${file})`);
+}
 execFileSync('pnpm', ['exec', 'tsc'], { cwd: directory, stdio: 'inherit' });
 // Share only Docker service state, never workspace code or module resolution.
 execFileSync(process.execPath, ['out/verify.js'], {

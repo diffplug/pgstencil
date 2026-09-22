@@ -8,10 +8,15 @@
     "./testing": "./src/testing.ts",
     "./migrations": "./src/migrations.ts"
   },
-  "dependencies": {
+  "peerDependencies": {
+    "kysely": "^0.29.5",
+    "pgstencil": "workspace:^",
+    "stripe": "^22.6.1"
+  },
+  "devDependencies": {
+    "kysely": "^0.29.5",
     "pgstencil": "workspace:*",
-    "kysely": "0.29.5",
-    "stripe": "22.6.1"
+    "stripe": "^22.6.1"
   },
   "engines": {
     "node": ">=24"

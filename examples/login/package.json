@@ -5,9 +5,11 @@
   "type": "module",
   "dependencies": {
     "@pgstencil/stripe": "workspace:*",
-    "kysely": "0.29.5",
+    "kysely": "^0.29.5",
     "pg": "^8.16.0",
     "pgstencil": "workspace:*",
-    "@pgstencil/auth": "workspace:*"
+    "@pgstencil/auth": "workspace:*",
+    "hono": "^4.13.7",
+    "stripe": "^22.6.1"
   }
 }

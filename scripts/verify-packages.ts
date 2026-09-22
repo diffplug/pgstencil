@@ -7,6 +7,8 @@ import { projectRoot } from '../packages/pgstencil/src/paths.ts';
 const directory = await mkdtemp(join(tmpdir(), 'pgstencil-packed-'));
 await mkdir(join(directory, 'vendor'));
 const dependencies: Record<string, string> = {};
+// The consumer owns every shared library, at the version this workspace tests.
+const peers: Record<string, string> = {};
 for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
   const packageDirectory = name === 'pgstencil' ? name : name.split('/')[1]!;
   const manifest = JSON.parse(
@@ -14,13 +16,30 @@ for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
       join(projectRoot, 'packages', packageDirectory, 'package.json'),
       'utf8',
     ),
-  ) as { version: string };
+  ) as { version: string; peerDependencies?: Record<string, string> };
   const file = `${name.replace('@', '').replace('/', '-')}-${manifest.version}.tgz`;
   await cp(
     join(projectRoot, 'dist/packages', file),
     join(directory, 'vendor', file),
   );
   dependencies[name] = `file:./vendor/${file}`;
+  for (const peer of Object.keys(manifest.peerDependencies ?? {})) {
+    if (peer === 'pgstencil') continue;
+    const installed = JSON.parse(
+      await readFile(
+        join(
+          projectRoot,
+          'packages',
+          packageDirectory,
+          'node_modules',
+          peer,
+          'package.json',
+        ),
+        'utf8',
+      ),
+    ) as { version: string };
+    peers[peer] = installed.version;
+  }
 }
 await writeFile(
   join(directory, 'package.json'),
@@ -30,7 +49,7 @@ await writeFile(
       private: true,
       type: 'module',
       packageManager: 'pnpm@10.30.1',
-      dependencies,
+      dependencies: { ...dependencies, ...peers },
       pnpm: { overrides: dependencies },
       devDependencies: { '@types/node': '24.13.3', typescript: '5.9.3' },
     },
@@ -113,6 +132,12 @@ await writeFile(
     },
     include: ['verify.ts'],
   }),
+);
+// A shared library outside pgstencil's range, or one nothing provides, fails
+// the install instead of only warning.
+await writeFile(
+  join(directory, '.npmrc'),
+  'auto-install-peers=false\nstrict-peer-dependencies=true\n',
 );
 execFileSync('pnpm', ['install', '--ignore-scripts'], {
   cwd: directory,

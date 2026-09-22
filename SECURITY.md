@@ -19,7 +19,7 @@ Pinned by `integration/better-auth.test.ts`: `email policy: secret-keyed codes, 
 - **FAIL IF** a state-changing POST is accepted without an exact `Origin` match, a signature-verified CSRF cookie, a matching `X-CSRF-Token` and an `application/json` body; inspect `protectAuth` in `better-auth-security.ts`.
 - **FAIL IF** an upstream Better Auth route outside the read/write allowlist answers with anything but 404, or a provider callback accepts a method other than GET and Apple's `form_post` relay; inspect `protectAuth`.
 - **FAIL IF** a response leaves without `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and a CSP denying framing, inline script and third-party sources; inspect `protectAuth`.
-- **FAIL IF** the app accepts a non-canonical origin, a secret under 32 characters, or a success/error path off the application origin; inspect `authOptions` in `better-auth.ts`. `audit`.
+- **FAIL IF** the app accepts a non-canonical origin, a secret under 32 characters, or a success/error path off the application origin; inspect `authOptions` in `better-auth.ts`.
 
 Pinned by `integration/better-auth.test.ts`: `auth surface: explicit CSRF, exact origin, security headers and disabled unused endpoints`, `Better Auth email rejects expired codes and cross-origin sign-in`; `integration/better-auth-oauth.test.ts`: `Better Auth OAuth: Apple form_post relay, wrong browser, mismatched provider and expired state`.
 
@@ -74,7 +74,12 @@ Pinned by `pnpm packages:verify` in `.github/workflows/check.yml`.
 
 ## Continuous checks
 
-- **FAIL IF** `.github/workflows/check.yml` stops running `db:verify`, `test` and `packages:verify` on pushes to `main` and on every pull request, drops `persist-credentials: false`, or grants any permission beyond `contents: read`; inspect `.github/workflows/check.yml`. `audit`.
+- **FAIL IF** `.github/workflows/check.yml` stops running `db:verify`, `test` and `packages:verify` on pushes to `main` and on every pull request, drops `persist-credentials: false`, or grants any permission beyond `contents: read`; inspect `.github/workflows/check.yml`.
+- **FAIL IF** `.github/workflows/security-audit.yml` is missing or disabled, loses its `push` to `main` trigger or its `security-audit` job name — a consumer reads that check run by name — lets the reporting step treat anything but an exact `VERDICT: PASS` line above a `<!-- END OF REPORT -->` sentinel as passing, or drops the step that redacts secrets from the report and the transcript; inspect `.github/workflows/security-audit.yml`.
+
+## How this file is checked
+
+`.github/workflows/security-audit.yml` executes this file nightly at 04:51 UTC, on demand, and on every push to `main`. One agent runs every `FAIL IF` above as a mechanical check, then reads the code behind them adversarially, following `.github/audit/_preamble.md` and `.github/audit/security.md`; `scripts/security-audit-local.sh` runs the same prompts against the same files locally. A run that does not reach an exact `VERDICT: PASS` files or appends to an open issue labelled `security-audit-failure` and exits non-zero, and a later pass closes it. Every run archives the report and the session transcript as the `audit-transcript` artifact — public, like this repository, and kept 14 days.
 
 ## Reporting a vulnerability
 

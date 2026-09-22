@@ -11,3 +11,7 @@ packages/*/LICENSE
 
 .wrangler/
 .dev.vars*
+
+# Written by the security audit; see .github/workflows/security-audit.yml.
+audit-report.md
+audit-comment.md

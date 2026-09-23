@@ -82,8 +82,11 @@ async function fixture(
     oauth: allOAuthCredentials,
     outboundFetch,
   });
-  const request = (path: string, init?: RequestInit) =>
-    app.fetch(new Request(origin + path, init));
+  const request = (path: string, init?: RequestInit, ip?: string) =>
+    app.fetch(
+      new Request(origin + path, init),
+      ip ? { incoming: { socket: { remoteAddress: ip } } } : undefined,
+    );
   let ip = 0;
   const browser = async () => {
     const csrfResponse = await request('/api/auth/csrf');
@@ -106,17 +109,20 @@ async function fixture(
       cookie,
       post: async (path: string, body: object) =>
         accept(
-          await request('/api/auth/' + path, {
-            method: 'POST',
-            headers: {
-              origin,
-              cookie: cookie(),
-              'x-csrf-token': csrf,
-              'content-type': 'application/json',
-              'x-pgstencil-client-ip': address,
+          await request(
+            '/api/auth/' + path,
+            {
+              method: 'POST',
+              headers: {
+                origin,
+                cookie: cookie(),
+                'x-csrf-token': csrf,
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify(body),
             },
-            body: JSON.stringify(body),
-          }),
+            address,
+          ),
         ),
       get: async (path: string) =>
         accept(await request(path, { headers: { cookie: cookie() } })),

@@ -12,8 +12,9 @@ export function createDeterministicApp(
   const app = deterministicScope.run(options, () => createEmailApp(options));
   return {
     close: app.close,
-    fetch: (request: Request) =>
-      deterministicScope.run(options, () => app.app.fetch(request)),
+    // env carries the Node socket (`incoming`) that the client IP is read from.
+    fetch: (request: Request, env?: object) =>
+      deterministicScope.run(options, () => app.app.fetch(request, env)),
     // Deliberately crosses async boundaries to test independent concurrent app contexts.
     probe: () =>
       deterministicScope.run(options, async () => {

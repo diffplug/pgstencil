@@ -2,7 +2,7 @@
 
 pgstencil ships `pgstencil`, `@pgstencil/auth` and `@pgstencil/stripe` as packed tarballs ([PACKAGES.md](PACKAGES.md)). This file states what the Better Auth integration in `@pgstencil/auth` and `pgstencil` itself guarantee to a consuming application, as conditions an auditor can check at one commit; each section ends with the tests that pin them. Bare names are under `packages/auth/src/`, `packages/auth/better-auth-migrations/` or `tests/`.
 
-The application owns everything outside the packages: TLS and its origin gate, the CSP of its own pages, secret and credential storage, database provisioning, and provider registration. `@pgstencil/stripe` and the original code/link `Auth` exports carry no rules here yet.
+The application owns everything outside the packages: TLS and its origin gate, the CSP of its own pages, secret and credential storage, database provisioning, provider registration, and — only when it opts in with `ipAddressHeaders` — a proxy that overwrites those headers on every request. `@pgstencil/stripe` and the original code/link `Auth` exports carry no rules here yet.
 
 ## Sessions and cookies
 
@@ -26,10 +26,11 @@ Pinned by `integration/better-auth.test.ts`: `auth surface: explicit CSRF, exact
 ## Email codes
 
 - **FAIL IF** a stored email code is recoverable without the application secret, is not separated by purpose from other keyed values, lives longer than ten minutes, survives more than three failed guesses, or is redeemed twice; inspect `emailOTP` in `better-auth.ts` and `keyed` in `better-auth-security.ts`.
-- **FAIL IF** a rate-limit key contains a raw email address or IP, or a changing client IP resets an address's one-minute resend cooldown, five sends or fifteen verification attempts per fifteen minutes; inspect `consume` in `better-auth-security.ts`.
+- **FAIL IF** a stored rate-limit key — Better Auth's `rateLimit` rows or pgstencil's `pgstencil_auth_limits` — contains a raw email address or IP instead of a secret-keyed HMAC, or a changing client IP resets an address's one-minute resend cooldown, five sends or fifteen verification attempts per fifteen minutes; inspect `rateLimitStorage` and `consume` in `better-auth-security.ts`, `rateLimit` in `better-auth.ts` and `005_hashed_rate_limit_keys.sql`.
+- **FAIL IF** Better Auth's per-IP limiter or pgstencil's per-IP email budget counts any address but one trusted client IP — on Node the socket address `@hono/node-server` passes as `env.incoming`, or a forwarded header only when the application names it in `ipAddressHeaders` — or a client-supplied `x-pgstencil-client-ip` reaches either limiter; inspect `protectAuth` in `better-auth-security.ts` and `advanced.ipAddress` in `better-auth.ts`.
 - **FAIL IF** the Workers adapter counts a client-IP header other than `cf-connecting-ip`, or an address in the reserved `identity.pgstencil.invalid` namespace reaches an email route or the email sender; inspect `better-auth-workers.ts` and `isIdentityEmail`.
 
-Pinned by `integration/better-auth.test.ts`: `email policy: secret-keyed codes, cross-browser redemption, concurrent single use and no token exposure`, `email policy: distributed IPs cannot bypass cooldown, send quota or attempt budget`; `integration/better-auth-workers.test.ts`: `Better Auth in workerd: deterministic replay, separate clocks, shared database rate limits`; `integration/better-auth-oauth.test.ts`: `Optional email: <provider> signs in by stable identity without a mailbox`.
+Pinned by `integration/better-auth.test.ts`: `email policy: secret-keyed codes, cross-browser redemption, concurrent single use and no token exposure`, `email policy: distributed IPs cannot bypass cooldown, send quota or attempt budget`, `IP rate limits: stored limiter keys never contain a raw client IP`, `IP rate limits: the default Node path counts the socket, so rotating x-pgstencil-client-ip cannot escape`, `IP rate limits: concurrent requests from one address are counted atomically`, `IP rate limits: naming a victim's IP in x-pgstencil-client-ip spends only the caller's budget`, `IP rate limits: an explicit ipAddressHeaders opt-in counts the configured header`; `integration/better-auth-workers.test.ts`: `Better Auth in workerd: deterministic replay, separate clocks, shared database rate limits`; `integration/better-auth-oauth.test.ts`: `Optional email: <provider> signs in by stable identity without a mailbox`.
 
 ## OAuth
 

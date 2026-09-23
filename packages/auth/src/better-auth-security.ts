@@ -26,6 +26,60 @@ function cookies(request: Request) {
   );
 }
 
+/**
+ * The one header Better Auth and the email budgets read a client IP from.
+ * `protectAuth` always overwrites or deletes it before any handler runs.
+ */
+export const clientIpHeader = 'x-pgstencil-client-ip';
+
+/**
+ * Better Auth's per-IP limiter, keyed by an HMAC of its `<ip>|<path>` key so the
+ * table never holds a raw address. One upsert decides and increments atomically,
+ * across requests and Worker isolates, with Better Auth's rolling-window rule.
+ */
+export function rateLimitStorage(
+  db: ReturnType<typeof connectDatabase>,
+  secret: string,
+) {
+  return {
+    async consume(key: string, rule: { window: number; max: number }) {
+      const hashed = keyed(secret, 'rate-limit', key);
+      const now = Date.now();
+      const cutoff = now - rule.window * 1000;
+      const result = await sql<{ count: number }>`
+        INSERT INTO "rateLimit" (id, key, count, "lastRequest")
+        VALUES (gen_random_uuid()::text, ${hashed}, 1, ${now})
+        ON CONFLICT (key) DO UPDATE SET
+          count = CASE WHEN "rateLimit"."lastRequest" <= ${cutoff} THEN 1 ELSE "rateLimit".count + 1 END,
+          "lastRequest" = ${now}
+        WHERE "rateLimit"."lastRequest" <= ${cutoff} OR "rateLimit".count < ${rule.max}
+        RETURNING count
+      `.execute(db);
+      if (result.rows.length === 1) {
+        // Better Auth's windows are at most a minute; an hour-old row is dead.
+        if (result.rows[0]!.count === 1)
+          await sql`DELETE FROM "rateLimit" WHERE "lastRequest" < ${now - 3_600_000}`.execute(
+            db,
+          );
+        return { allowed: true, retryAfter: null };
+      }
+      const last = await sql<{
+        lastRequest: string;
+      }>`SELECT "lastRequest" FROM "rateLimit" WHERE key = ${hashed}`.execute(
+        db,
+      );
+      const since = Number(last.rows[0]?.lastRequest ?? now);
+      return {
+        allowed: false,
+        retryAfter: Math.max(
+          1,
+          Math.ceil((since + rule.window * 1000 - now) / 1000),
+        ),
+      };
+    },
+  };
+}
+
 /** Shared, atomic limits: changing client IP cannot reset an email's budget. */
 async function consume(
   db: ReturnType<typeof connectDatabase>,
@@ -53,6 +107,7 @@ export function protectAuth(
     origin: string;
     secret: string;
     database: ReturnType<typeof connectDatabase>;
+    /** Trusted forwarded headers; without them only the Node socket counts. */
     ipAddressHeaders?: string[];
     accountLinking?: 'explicit' | 'same-email';
   },
@@ -64,6 +119,27 @@ export function protectAuth(
     const [token, signature] = value.split('.') as [string, string];
     return equal(signature, keyed(options.secret, 'csrf', token));
   };
+  app.use('*', async (c, next) => {
+    // Never let a client name its own IP: derive it from the socket that
+    // @hono/node-server passes as env.incoming, or from a header the
+    // application explicitly trusts, then overwrite the internal header.
+    const candidates = options.ipAddressHeaders
+      ? options.ipAddressHeaders.map((name) => c.req.header(name))
+      : [
+          (
+            c.env as
+              { incoming?: { socket?: { remoteAddress?: string } } } | undefined
+          )?.incoming?.socket?.remoteAddress,
+        ];
+    const ip = candidates
+      .map((value) => value?.trim())
+      .find((value) => !!value && /^[0-9A-Fa-f:.]{2,45}$/.test(value));
+    const headers = new Headers(c.req.raw.headers);
+    if (ip) headers.set(clientIpHeader, ip);
+    else headers.delete(clientIpHeader);
+    c.req.raw = new Request(c.req.raw, { headers });
+    await next();
+  });
   app.use('*', async (c, next) => {
     await next();
     // Apply to the final response, including upstream immutable redirects.
@@ -154,10 +230,7 @@ export function protectAuth(
       const send = path === '/email-otp/send-verification-otp';
       if (send && body.type !== 'sign-in')
         return c.json({ message: 'Unsupported email operation' }, 400);
-      const ip =
-        (options.ipAddressHeaders ?? ['x-pgstencil-client-ip'])
-          .map((name) => c.req.header(name))
-          .find(Boolean) ?? 'unknown';
+      const ip = c.req.header(clientIpHeader) ?? 'unknown';
       // Bound per-email counter creation even after upstream IP limits reject.
       if (
         !(await consume(

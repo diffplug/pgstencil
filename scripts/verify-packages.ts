@@ -106,7 +106,7 @@ try {
     const csrfResponse = await modern.app.fetch(new Request('https://consumer.test/api/auth/csrf'));
     const csrf = (await csrfResponse.json()).csrf;
     const cookie = csrfResponse.headers.getSetCookie().map((v) => v.split(';')[0]).join('; ');
-    const post = (path: string, body: object) => modern.app.fetch(new Request('https://consumer.test/api/auth/' + path, {method:'POST',headers:{origin:'https://consumer.test',cookie,'x-csrf-token':csrf,'content-type':'application/json','x-pgstencil-client-ip':'127.0.0.1'},body:JSON.stringify(body)}));
+    const post = (path: string, body: object) => modern.app.fetch(new Request('https://consumer.test/api/auth/' + path, {method:'POST',headers:{origin:'https://consumer.test',cookie,'x-csrf-token':csrf,'content-type':'application/json'},body:JSON.stringify(body)}),{incoming:{socket:{remoteAddress:'127.0.0.1'}}});
     assert.equal((await post('email-otp/send-verification-otp',{email:'modern@example.test',type:'sign-in'})).status,200);
     const otp = (await email.next()).text.match(/\\b\\d{8}\\b/)![0];
     const signedIn = await post('sign-in/email-otp',{email:'modern@example.test',otp});

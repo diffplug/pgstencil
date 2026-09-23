@@ -46,6 +46,7 @@ const built = (async () => {
 async function fixture(
   now = '2020-01-01T00:00:00.000Z',
   sessionPolicy: 'single' | 'multiple' = 'multiple',
+  extra: { ipAddressHeaders?: string[] } = {},
 ) {
   const context = await createTestContext({
     migrations,
@@ -56,6 +57,7 @@ async function fixture(
   const app = createDeterministicApp({
     ...context,
     sessionPolicy,
+    ...extra,
     databaseUrl: context.database.url,
     origin,
     secret: 'better-auth-local-test-secret-32-characters',
@@ -221,12 +223,16 @@ test('Better Auth email rejects expired codes and cross-origin sign-in', async (
   expect(f.email.all()).toHaveLength(1);
 });
 
+/** The binding @hono/node-server passes: the connection a client cannot forge. */
+const socket = (remoteAddress: string) => ({
+  incoming: { socket: { remoteAddress } },
+});
 async function directPost(
   f: Fixture,
   path: string,
   body: object,
   ip = '192.0.2.1',
-  cookie = '',
+  headers: Record<string, string> = {},
 ) {
   return f.app.fetch(
     new Request(origin + '/api/auth/' + path, {
@@ -235,11 +241,12 @@ async function directPost(
         origin,
         'content-type': 'application/json',
         'x-csrf-token': f.csrf,
-        'x-pgstencil-client-ip': ip,
-        cookie: [f.csrfCookie, cookie].filter(Boolean).join('; '),
+        cookie: f.csrfCookie,
+        ...headers,
       },
       body: JSON.stringify(body),
     }),
+    socket(ip),
   );
 }
 
@@ -283,10 +290,10 @@ test('email policy: secret-keyed codes, cross-browser redemption, concurrent sin
             'content-type': 'application/json',
             'x-csrf-token': other.body.csrf,
             cookie: cookieFrom(other),
-            'x-pgstencil-client-ip': `192.0.2.${i + 1}`,
           },
           body: JSON.stringify({ email: 'alice@example.test', otp }),
         }),
+        socket(`192.0.2.${i + 1}`),
       ),
     ),
   );
@@ -387,6 +394,178 @@ test('email policy: distributed IPs cannot bypass cooldown, send quota or attemp
       )
     ).status,
   ).toBe(200);
+});
+
+const secret = 'better-auth-local-test-secret-32-characters';
+const hmac = async (purpose: string, value: string) =>
+  (await import('node:crypto'))
+    .createHmac('sha256', secret)
+    .update(purpose + '\0')
+    .update(value)
+    .digest('hex');
+const sendStatuses = async (
+  count: number,
+  send: (email: string, i: number) => Promise<{ status: number }>,
+) => {
+  const statuses = [];
+  for (let i = 0; i < count; i++)
+    statuses.push(
+      (await send(`ip-${i}-${statuses.length}@example.test`, i)).status,
+    );
+  return statuses;
+};
+const sendOtp = { type: 'sign-in' };
+
+test('IP rate limits: stored limiter keys never contain a raw client IP', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  await f
+    .post('email-otp/send-verification-otp', {
+      email: 'loopback@example.test',
+      type: 'sign-in',
+    })
+    .expect(200);
+  expect(
+    await sendStatuses(4, (email) =>
+      directPost(
+        f,
+        'email-otp/send-verification-otp',
+        { ...sendOtp, email },
+        '203.0.113.50',
+      ),
+    ),
+  ).toEqual([200, 200, 200, 429]);
+  await directPost(
+    f,
+    'sign-in/email-otp',
+    { email: 'loopback@example.test', otp: '00000000' },
+    '2001:db8::77',
+  );
+  const upstream = await queryDatabase<{ key: string }>(
+    f.database.url,
+    'SELECT * FROM "rateLimit"',
+  );
+  const own = await queryDatabase<{ key: string }>(
+    f.database.url,
+    'SELECT * FROM pgstencil_auth_limits',
+  );
+  const stored = JSON.stringify([upstream, own]);
+  for (const ip of ['203.0.113.50', '2001:db8', '127.0.0.1', '::1'])
+    expect(stored).not.toContain(ip);
+  expect(upstream.length).toBeGreaterThanOrEqual(3);
+  for (const row of upstream) expect(row.key).toMatch(/^[0-9a-f]{64}$/);
+  // Both limiters count the same trusted address, each under its own secret-keyed purpose.
+  expect(upstream.map((row) => row.key)).toContain(
+    await hmac('rate-limit', '203.0.113.50|/email-otp/send-verification-otp'),
+  );
+  expect(own.map((row) => row.key)).toContain(
+    `send:ip:${await hmac('ip-rate', '203.0.113.50')}`,
+  );
+});
+
+test('IP rate limits: the default Node path counts the socket, so rotating x-pgstencil-client-ip cannot escape', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  // A real @hono/node-server socket: every request arrives from loopback.
+  expect(
+    await sendStatuses(4, (email, i) =>
+      f.client
+        .post('/api/auth/email-otp/send-verification-otp')
+        .set('Origin', origin)
+        .set('Cookie', f.csrfCookie)
+        .set('X-CSRF-Token', f.csrf)
+        .set('x-pgstencil-client-ip', `198.51.100.${i + 1}`)
+        .set('x-forwarded-for', `198.51.100.${i + 1}`)
+        .send({ ...sendOtp, email }),
+    ),
+  ).toEqual([200, 200, 200, 429]);
+});
+
+test('IP rate limits: concurrent requests from one address are counted atomically', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  const burst = await Promise.all(
+    Array.from({ length: 8 }, (_, i) =>
+      directPost(
+        f,
+        'email-otp/send-verification-otp',
+        { ...sendOtp, email: `burst-${i}@example.test` },
+        '198.51.100.30',
+      ),
+    ),
+  );
+  expect(burst.filter((r) => r.status === 200)).toHaveLength(3);
+  expect(burst.filter((r) => r.status === 429)).toHaveLength(5);
+});
+
+test("IP rate limits: naming a victim's IP in x-pgstencil-client-ip spends only the caller's budget", async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  const victim = '203.0.113.9';
+  expect(
+    await sendStatuses(4, (email) =>
+      directPost(
+        f,
+        'email-otp/send-verification-otp',
+        { ...sendOtp, email },
+        '198.51.100.7',
+        { 'x-pgstencil-client-ip': victim },
+      ),
+    ),
+  ).toEqual([200, 200, 200, 429]);
+  expect(
+    (
+      await directPost(
+        f,
+        'email-otp/send-verification-otp',
+        { ...sendOtp, email: 'victim@example.test' },
+        victim,
+      )
+    ).status,
+  ).toBe(200);
+});
+
+test('IP rate limits: an explicit ipAddressHeaders opt-in counts the configured header', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture(undefined, undefined, {
+    ipAddressHeaders: ['x-real-ip'],
+  });
+  onTestFinished(() => f.close());
+  // Behind the trusted proxy every socket is the proxy's; the header decides.
+  expect(
+    await sendStatuses(4, (email, i) =>
+      directPost(
+        f,
+        'email-otp/send-verification-otp',
+        { ...sendOtp, email },
+        '10.0.0.1',
+        { 'x-real-ip': `198.51.100.${i + 1}` },
+      ),
+    ),
+  ).toEqual([200, 200, 200, 200]);
+  expect(
+    await sendStatuses(4, (email, i) =>
+      directPost(
+        f,
+        'email-otp/send-verification-otp',
+        { ...sendOtp, email: 'again-' + email },
+        '10.0.0.1',
+        {
+          'x-real-ip': '203.0.113.20',
+          'x-pgstencil-client-ip': `192.0.2.${i + 1}`,
+        },
+      ),
+    ),
+  ).toEqual([200, 200, 200, 429]);
 });
 
 test('auth surface: explicit CSRF, exact origin, security headers and disabled unused endpoints', async ({

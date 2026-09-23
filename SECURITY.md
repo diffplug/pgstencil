@@ -61,10 +61,10 @@ Pinned by `unit/diagnostics.test.ts`: `diagnostics allowlist drops secrets even 
 
 ## Build and test isolation
 
-- **FAIL IF** a normal build reaches `@pgstencil/auth/better-auth-testing`, or a deployed Worker answers a test clock route; inspect `examples/better-auth/src/worker.ts` beside `support/better-auth-worker.ts`, and the esbuild `inject` that only test bundles carry.
+- **FAIL IF** a normal build injects `@pgstencil/auth/better-auth-testing`, importing that module changes a process global, or a deployed Worker answers a test clock route. The module is a published export that `packages:verify` imports; it is inert unless esbuild's `inject` names it, which only test bundles do. Inspect `better-auth-testing.ts`, `examples/better-auth/src/worker.ts` beside `support/better-auth-worker.ts`, and each bundle's `inject`.
 - **FAIL IF** Better Auth introspects or migrates the schema during a request, or the committed migrations stop matching Better Auth's generated plan; inspect `advanced.database` in `better-auth.ts` and `schemaChanges` in `examples/better-auth/src/schema.ts`.
 
-Pinned by `integration/better-auth-workers.test.ts`: `normal Workers build uses real time and randomness and contains no test clock controls`; `integration/better-auth.test.ts`: `Better Auth email: repeatable cookies, database and email snapshots across parallel apps`.
+Pinned by `integration/better-auth-workers.test.ts`: `normal Workers build uses real time and randomness and contains no test clock controls`; `integration/better-auth.test.ts`: `Better Auth email: repeatable cookies, database and email snapshots across parallel apps`, `Better Auth time: 23 hours, expiration boundary, isolated async contexts and unchanged host clock`.
 
 ## Packed provenance
 
@@ -95,6 +95,7 @@ Report privately through GitHub's [advisory form for diffplug/pgstencil](https:/
 - The consumer-owned controls listed above.
 - An attacker holding both the database contents and `AUTH_SECRET`. Better Auth stores native session tokens, so that pair mints a session cookie; either alone does not.
 - Better Auth behavior beyond what these tests pin; its private range admits patches only, and an upgrade must rerun the security and snapshot suites.
-- A provider that asserts an email it did not verify, and account recovery after a lost provider account or mailbox.
+- A provider that asserts an email it did not verify, and account recovery after a lost provider account or mailbox. Facebook sends no verification claim, so pgstencil treats any address Facebook returns as verified.
+- Two applications sharing both a database and `AUTH_SECRET`: they share OAuth state, sessions and limits, and count as one application here.
 - Multi-factor authentication and passkeys, and abuse beyond the budgets above.
 - `@pgstencil/stripe`, the original code/link `Auth` exports, and the example applications; see [BILLING.md](BILLING.md), [OAUTH.md](OAUTH.md) and [LOGIN_FLOW.md](LOGIN_FLOW.md).

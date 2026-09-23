@@ -506,6 +506,41 @@ test('IP rate limits: concurrent requests from one address are counted atomicall
   expect(burst.filter((r) => r.status === 429)).toHaveLength(5);
 });
 
+test('IP rate limits: two IPv6 addresses in one /64 share one send:ip budget', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  const neighbours = ['2001:db8:1:2::a', '2001:db8:1:2:ffff:ffff:ffff:b'];
+  const send = (ip: string, i: number) =>
+    directPost(
+      f,
+      'email-otp/send-verification-otp',
+      { ...sendOtp, email: `v6-${i}@example.test` },
+      ip,
+    );
+  // Better Auth's own /64 limit allows three a minute; stay under it.
+  for (let i = 0; i < 30; i++) {
+    if (i && i % 3 === 0) f.time.advanceMilliseconds(60_000);
+    expect((await send(neighbours[i % 2]!, i)).status).toBe(200);
+  }
+  f.time.advanceMilliseconds(60_000);
+  expect((await send(neighbours[1]!, 30)).status).toBe(429);
+  expect((await send('2001:db8:1:3::a', 31)).status).toBe(200);
+  const own = await queryDatabase<{ key: string; count: number }>(
+    f.database.url,
+    "SELECT key, count FROM pgstencil_auth_limits WHERE key LIKE 'send:ip:%'",
+  );
+  expect(own).toEqual(
+    expect.arrayContaining([
+      {
+        key: `send:ip:${await hmac('ip-rate', '2001:0db8:0001:0002:0000:0000:0000:0000')}`,
+        count: 30,
+      },
+    ]),
+  );
+});
+
 test("IP rate limits: naming a victim's IP in x-pgstencil-client-ip spends only the caller's budget", async ({
   onTestFinished,
 }) => {

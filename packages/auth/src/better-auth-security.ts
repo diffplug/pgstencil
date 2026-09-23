@@ -80,6 +80,36 @@ export function rateLimitStorage(
   };
 }
 
+/**
+ * Better Auth's `normalizeIP(ip, { ipv6Subnet: 64 })`, which it does not
+ * re-export: IPv6 collapses to its /64 and IPv4-mapped IPv6 to IPv4, so one
+ * host cannot rotate addresses within its /64 for fresh budgets. A unit test
+ * compares the two.
+ */
+export function ipBucket(ip: string) {
+  if (!ip.includes(':')) return ip.toLowerCase();
+  let host: string;
+  try {
+    host = new URL(`http://[${ip}]`).hostname.slice(1, -1);
+  } catch {
+    return ip.toLowerCase();
+  }
+  const [left = '', right = ''] = host.split('::');
+  const head = left ? left.split(':') : [];
+  const tail = host.includes('::') && right ? right.split(':') : [];
+  const groups = [
+    ...head,
+    ...Array<string>(8 - head.length - tail.length).fill('0'),
+    ...tail,
+  ].map((group) => group.padStart(4, '0'));
+  if (groups.slice(0, 5).every((g) => g === '0000') && groups[5] === 'ffff')
+    return groups
+      .slice(6)
+      .flatMap((g) => [parseInt(g.slice(0, 2), 16), parseInt(g.slice(2), 16)])
+      .join('.');
+  return [...groups.slice(0, 4), '0000', '0000', '0000', '0000'].join(':');
+}
+
 /** Shared, atomic limits: changing client IP cannot reset an email's budget. */
 async function consume(
   db: ReturnType<typeof connectDatabase>,
@@ -230,7 +260,7 @@ export function protectAuth(
       const send = path === '/email-otp/send-verification-otp';
       if (send && body.type !== 'sign-in')
         return c.json({ message: 'Unsupported email operation' }, 400);
-      const ip = c.req.header(clientIpHeader) ?? 'unknown';
+      const ip = ipBucket(c.req.header(clientIpHeader) ?? 'unknown');
       // Bound per-email counter creation even after upstream IP limits reject.
       if (
         !(await consume(

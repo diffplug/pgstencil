@@ -14,9 +14,11 @@ import { sql } from 'kysely';
 import { connectDatabase } from 'pgstencil/postgres';
 import type { EmailSender } from 'pgstencil';
 import {
+  clientIpHeader,
   keyed,
   protectAuth,
   publicAuthResponse,
+  rateLimitStorage,
 } from './better-auth-security.ts';
 import {
   socialProviders,
@@ -38,6 +40,11 @@ export interface AuthOptions {
   origin: string;
   secret: string;
   email: EmailSender;
+  /**
+   * Opt in to trusting these forwarded headers, in order, for the client IP.
+   * Only set this behind a proxy that overwrites them. Without it, Node counts
+   * the socket address and ignores every client-supplied IP header.
+   */
   ipAddressHeaders?: string[];
   sessionPolicy?: 'single' | 'multiple';
   accountLinking?: 'explicit' | 'same-email';
@@ -184,12 +191,15 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
       },
       disableOriginCheck: false,
       disableCSRFCheck: false,
-      ipAddress: {
-        ipAddressHeaders: options.ipAddressHeaders ?? ['x-pgstencil-client-ip'],
-      },
+      // protectAuth overwrites this header from a trusted source on every request.
+      ipAddress: { ipAddressHeaders: [clientIpHeader] },
     },
     // Workers are request-scoped; an in-memory limiter would reset every request.
-    rateLimit: { enabled: true, storage: 'database' },
+    rateLimit: {
+      enabled: true,
+      storage: 'database',
+      customStorage: rateLimitStorage(options.database, options.secret),
+    },
     session: {
       additionalFields: {
         emailAuthenticated: {

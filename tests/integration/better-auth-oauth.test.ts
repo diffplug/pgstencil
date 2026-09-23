@@ -82,8 +82,11 @@ async function fixture(
     oauth: allOAuthCredentials,
     outboundFetch,
   });
-  const request = (path: string, init?: RequestInit) =>
-    app.fetch(new Request(origin + path, init));
+  const request = (path: string, init?: RequestInit, ip?: string) =>
+    app.fetch(
+      new Request(origin + path, init),
+      ip ? { incoming: { socket: { remoteAddress: ip } } } : undefined,
+    );
   let ip = 0;
   const browser = async () => {
     const csrfResponse = await request('/api/auth/csrf');
@@ -106,17 +109,20 @@ async function fixture(
       cookie,
       post: async (path: string, body: object) =>
         accept(
-          await request('/api/auth/' + path, {
-            method: 'POST',
-            headers: {
-              origin,
-              cookie: cookie(),
-              'x-csrf-token': csrf,
-              'content-type': 'application/json',
-              'x-pgstencil-client-ip': address,
+          await request(
+            '/api/auth/' + path,
+            {
+              method: 'POST',
+              headers: {
+                origin,
+                cookie: cookie(),
+                'x-csrf-token': csrf,
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify(body),
             },
-            body: JSON.stringify(body),
-          }),
+            address,
+          ),
         ),
       get: async (path: string) =>
         accept(await request(path, { headers: { cookie: cookie() } })),
@@ -238,6 +244,26 @@ for (const provider of ['google', 'apple', 'microsoft'] as const)
     }
   });
 
+for (const provider of ['google', 'apple', 'microsoft'] as const)
+  test(`Better Auth OAuth: ${provider} rejects ID tokens whose header names an algorithm other than RS256`, async ({
+    onTestFinished,
+  }) => {
+    const f = await fixture();
+    onTestFinished(() => f.close());
+    for (const algorithm of ['HS256', 'none', 'PS256', 'RS512'] as const) {
+      const browser = await f.browser();
+      const { response } = await login(f, browser, provider, { algorithm });
+      expect(response.headers.get('location'), algorithm).toContain(
+        'error=oauth_failed',
+      );
+      expect(await session(browser), algorithm).toBeNull();
+    }
+    // The same token under RS256 still signs in: only the algorithm changed.
+    const browser = await f.browser();
+    await login(f, browser, provider);
+    expect((await session(browser))?.user.email).toBe('oauth@example.test');
+  });
+
 test('Better Auth OAuth: Apple form_post relay, wrong browser, mismatched provider and expired state', async ({
   onTestFinished,
 }) => {
@@ -284,6 +310,34 @@ test('Better Auth OAuth: Apple form_post relay, wrong browser, mismatched provid
   expect((await another.follow(pending)).headers.get('location')).toContain(
     'error=oauth_failed',
   );
+});
+
+test("Better Auth OAuth: callbacks refuse every method but GET and Apple's form-encoded POST", async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  const form = { 'content-type': 'application/x-www-form-urlencoded' };
+  const json = { 'content-type': 'application/json' };
+  for (const [provider, method, headers] of [
+    ['google', 'POST', form],
+    ['github', 'POST', json],
+    ['facebook', 'POST', form],
+    ['microsoft', 'POST', form],
+    ['google', 'PUT', form],
+    ['apple', 'POST', json],
+    ['apple', 'POST', { 'content-type': 'text/plain' }],
+    ['apple', 'PUT', form],
+    ['apple', 'DELETE', form],
+  ] as const) {
+    const response = await f.request(`/api/auth/callback/${provider}`, {
+      method,
+      headers,
+      body: 'code=attacker&state=attacker',
+    });
+    expect(response.status, `${method} ${provider}`).toBe(405);
+  }
+  expect(f.destinations).toEqual([]);
 });
 
 test('Better Auth OAuth: email collision requires explicit linking; linking binds to live session', async ({

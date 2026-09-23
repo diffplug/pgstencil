@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { resolve, join } from 'node:path';
+import { resolve, join, relative, isAbsolute, sep } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 /** Workspace paths, kept free of heavy imports so light scripts can use them. */
@@ -10,7 +10,17 @@ const configFile = join(projectRoot, 'pgstencil.json');
 const config = existsSync(configFile)
   ? (JSON.parse(readFileSync(configFile, 'utf8')) as { migrations?: string })
   : {};
-export const defaultMigrations = resolve(
+/** Resolve a configured migrations directory, refusing one outside the project root. */
+export function migrationsDirectory(root: string, configured: string) {
+  const directory = resolve(root, configured);
+  const path = relative(root, directory);
+  if (path === '..' || path.startsWith('..' + sep) || isAbsolute(path))
+    throw new Error(
+      `pgstencil.json migrations must stay inside the project root: ${configured}`,
+    );
+  return directory;
+}
+export const defaultMigrations = migrationsDirectory(
   projectRoot,
   config.migrations ?? 'migrations',
 );

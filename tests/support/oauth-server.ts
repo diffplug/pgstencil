@@ -1,6 +1,12 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { createHash, createHmac, generateKeyPairSync, sign } from 'node:crypto';
+import {
+  constants,
+  createHash,
+  createHmac,
+  generateKeyPairSync,
+  sign,
+} from 'node:crypto';
 import type { OAuthFetch } from '../../examples/login/src/oauth-providers.ts';
 import type {
   Provider,
@@ -71,6 +77,8 @@ export interface GrantOptions {
   verified?: boolean;
   claims?: Record<string, unknown>;
   badSignature?: boolean;
+  /** Forge the ID token under another algorithm; HS256 is keyed with the public key. */
+  algorithm?: 'HS256' | 'none' | 'PS256' | 'RS512';
   missingIdToken?: boolean;
   tokenFailure?: boolean;
   profileFailure?: boolean;
@@ -213,13 +221,39 @@ export async function mockOAuthServer(
               : {}),
             ...grant.options.claims,
           };
+          const algorithm = grant.options.algorithm ?? 'RS256';
           const unsigned = [
             Buffer.from(
-              JSON.stringify({ alg: 'RS256', kid: 'test-key' }),
+              JSON.stringify({ alg: algorithm, kid: 'test-key' }),
             ).toString('base64url'),
             Buffer.from(JSON.stringify(claims)).toString('base64url'),
           ].join('.');
-          response.id_token = `${unsigned}.${sign('RSA-SHA256', Buffer.from(unsigned), grant.options.badSignature ? otherKey().privateKey : key.privateKey).toString('base64url')}`;
+          const data = Buffer.from(unsigned);
+          const privateKey = grant.options.badSignature
+            ? otherKey().privateKey
+            : key.privateKey;
+          const signature =
+            algorithm === 'none'
+              ? Buffer.alloc(0)
+              : algorithm === 'HS256'
+                ? createHmac(
+                    'sha256',
+                    key.publicKey.export({ type: 'spki', format: 'pem' }),
+                  )
+                    .update(data)
+                    .digest()
+                : algorithm === 'PS256'
+                  ? sign('sha256', data, {
+                      key: privateKey,
+                      padding: constants.RSA_PKCS1_PSS_PADDING,
+                      saltLength: 32,
+                    })
+                  : sign(
+                      algorithm === 'RS512' ? 'RSA-SHA512' : 'RSA-SHA256',
+                      data,
+                      privateKey,
+                    );
+          response.id_token = `${unsigned}.${signature.toString('base64url')}`;
         }
         return json(response);
       }

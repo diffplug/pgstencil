@@ -11,7 +11,7 @@ const database = await allocateDatabase(betterAuthMigrations);
 const email = new EmailDev(new SystemTime());
 let app: ReturnType<typeof createEmailApp> | undefined;
 const server = await listen(
-  async (request) => {
+  async (request, env) => {
     if (new URL(request.url).pathname === '/dev/emails')
       return new Response(
         await html`<!doctype html>
@@ -39,7 +39,7 @@ const server = await listen(
         },
       );
     return app
-      ? app.app.fetch(request)
+      ? app.app.fetch(request, env)
       : new Response('Starting', { status: 503 });
   },
   Number(process.env.PORT ?? 8082),

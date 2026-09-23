@@ -20,7 +20,7 @@ Every other dependency is private: pgstencil owns its version and applications d
 
 Production imports use `pgstencil`, `pgstencil/postgres`, `@pgstencil/auth` and `@pgstencil/stripe`. Docker startup and test fixtures are opt-in imports through `pgstencil/database`, `pgstencil/testing`, and `@pgstencil/stripe/testing`.
 
-The database tooling uses the current working directory as the project root, or `PGSTENCIL_PROJECT_ROOT` when explicitly set. State goes in that project's `.pgstencil`; its Docker Compose project name derives from the project path. A project can supply `compose.yaml`, otherwise the package's bundled default is used. The default SQL directory is `migrations`, overridable by a `pgstencil.json` file containing a `migrations` directory path. Applications composing packages should pass their complete source list explicitly:
+The database tooling uses the current working directory as the project root, or `PGSTENCIL_PROJECT_ROOT` when explicitly set. State goes in that project's `.pgstencil`; its Docker Compose project name derives from the project path. A project can supply `compose.yaml`, otherwise the package's bundled default is used. The default SQL directory is `migrations`, overridable by a `pgstencil.json` file containing a `migrations` directory path inside the project root; a path resolving outside it is refused. Applications composing packages should pass their complete source list explicitly:
 
 ```ts
 import { authMigrations } from '@pgstencil/auth/migrations';
@@ -78,7 +78,15 @@ retains its old migration source and adds this one; it must not drop checksum
 history. Old and new auth tables coexist, but sessions/accounts are independent.
 
 Node hosts use `createAuthApp({databaseUrl, origin, secret, email, ...})` and call
-`close()` before returning their database lease. Tests bundle their application
+`close()` before returning their database lease. Serve `app.fetch` through
+`@hono/node-server`, passing its `env` along: the socket in `env.incoming` is the
+client IP that Better Auth's per-IP limiter and pgstencil's per-IP email budget
+count, and any client-sent `x-pgstencil-client-ip` is overwritten. Behind a
+reverse proxy, opt in with `ipAddressHeaders: ['x-real-ip']`, naming a
+single-address header the proxy overwrites on every request; never name one a
+client can set. A request with neither shares one bucket. The Workers adapter
+always counts `cf-connecting-ip`. Stored limiter keys are HMACs under
+`AUTH_SECRET`, never raw addresses. Tests bundle their application
 with esbuild's `inject` set to the **actual module file** resolved from
 `@pgstencil/auth/better-auth-testing`. Injecting a re-export shim does not work.
 Use that module's `deterministicScope.run({time, random, outboundFetch}, action)`

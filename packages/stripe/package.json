@@ -1,7 +1,6 @@
 {
   "name": "@pgstencil/stripe",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.2.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -27,6 +26,7 @@
     "LICENSE"
   ],
   "publishConfig": {
+    "access": "public",
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",

@@ -13,6 +13,8 @@ import {
   stableJson,
 } from '../../packages/pgstencil/src/snapshots.ts';
 import { schemaChanges } from '../../examples/better-auth/src/schema.ts';
+import { authOptions } from '../../examples/better-auth/src/auth.ts';
+import { connectDatabase } from '../../packages/pgstencil/src/postgres.ts';
 import { listen } from '../../examples/better-auth/src/node.ts';
 import type { createDeterministicApp } from '../support/better-auth-entry.ts';
 
@@ -568,6 +570,32 @@ test('IP rate limits: an explicit ipAddressHeaders opt-in counts the configured 
   ).toEqual([200, 200, 200, 429]);
 });
 
+test('email policy: fifteen verification attempts per fifteen minutes stop even the right code from any IP', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  const email = 'guessed@example.test';
+  const send = (ip: string) =>
+    directPost(f, 'email-otp/send-verification-otp', { ...sendOtp, email }, ip);
+  const verify = (otp: string, ip: string) =>
+    directPost(f, 'sign-in/email-otp', { email, otp }, ip);
+  expect((await send('203.0.113.1')).status).toBe(200);
+  await f.email.next();
+  for (let i = 0; i < 15; i++)
+    expect((await verify('00000000', `198.51.100.${i + 1}`)).status).not.toBe(
+      429,
+    );
+  f.time.advanceMilliseconds(60_000);
+  expect((await send('203.0.113.2')).status).toBe(200);
+  const otp = (await f.email.next()).text.match(/\b\d{8}\b/)![0];
+  expect((await verify(otp, '192.0.2.200')).status).toBe(429);
+  f.time.advanceMilliseconds(15 * 60_000);
+  expect((await send('203.0.113.3')).status).toBe(200);
+  const fresh = (await f.email.next()).text.match(/\b\d{8}\b/)![0];
+  expect((await verify(fresh, '192.0.2.201')).status).toBe(200);
+});
+
 test('auth surface: explicit CSRF, exact origin, security headers and disabled unused endpoints', async ({
   onTestFinished,
 }) => {
@@ -609,7 +637,86 @@ test('auth surface: explicit CSRF, exact origin, security headers and disabled u
   );
   expect(page.headers['cache-control']).toBe('no-store');
   expect(page.headers['referrer-policy']).toBe('no-referrer');
+  const api = await f.client.get('/api/auth/get-session');
+  for (const response of [page, api]) {
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.headers['x-frame-options']).toBe('DENY');
+  }
   expect(f.email.all()).toHaveLength(0);
+});
+
+test('auth surface: an allowlisted write with a non-JSON body answers 415', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  for (const [path, type, body] of [
+    [
+      'email-otp/send-verification-otp',
+      'application/x-www-form-urlencoded',
+      'email=alice%40example.test&type=sign-in',
+    ],
+    [
+      'sign-in/email-otp',
+      'text/plain',
+      '{"email":"alice@example.test","otp":"00000000"}',
+    ],
+    ['sign-in/social', 'multipart/form-data; boundary=x', '--x--'],
+  ] as const)
+    await f.client
+      .post('/api/auth/' + path)
+      .set('Origin', origin)
+      .set('Cookie', f.csrfCookie)
+      .set('X-CSRF-Token', f.csrf)
+      .set('Content-Type', type)
+      .send(body)
+      .expect(415);
+  expect(f.email.all()).toHaveLength(0);
+});
+
+test('auth options reject a non-canonical origin, a short secret and off-origin redirect paths', ({
+  onTestFinished,
+}) => {
+  // Validation runs before any query; the pool never connects.
+  const database = connectDatabase('postgres://unused.invalid/none');
+  onTestFinished(() => database.destroy());
+  const base = {
+    database,
+    origin: 'https://app.example.test',
+    secret: 'a'.repeat(32),
+    email: { send: async () => {} },
+  };
+  expect(() => authOptions(base)).not.toThrow();
+  for (const origin of [
+    'https://APP.example.test',
+    'https://app.example.test/',
+    'https://app.example.test:443',
+    'https://app.example.test/path',
+  ])
+    expect(() => authOptions({ ...base, origin }), origin).toThrow(
+      'canonical origin',
+    );
+  expect(() => authOptions({ ...base, secret: 'a'.repeat(31) })).toThrow(
+    'at least 32 characters',
+  );
+  for (const path of [
+    '//attacker.test/',
+    '/\\attacker.test',
+    '/\t/attacker.test',
+    'https://attacker.test/',
+    'relative',
+  ]) {
+    expect(() => authOptions({ ...base, successPath: path }), path).toThrow(
+      'application origin',
+    );
+    expect(() => authOptions({ ...base, errorPath: path }), path).toThrow(
+      'application origin',
+    );
+  }
+  for (const path of ['/', '/profile?tab=1', '/%2F%2Fattacker.test'])
+    expect(() =>
+      authOptions({ ...base, successPath: path, errorPath: path }),
+    ).not.toThrow();
 });
 
 for (const policy of ['single', 'multiple'] as const)

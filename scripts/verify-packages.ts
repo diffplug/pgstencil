@@ -6,6 +6,9 @@ import { projectRoot } from '../packages/pgstencil/src/paths.ts';
 
 const directory = await mkdtemp(join(tmpdir(), 'pgstencil-packed-'));
 await mkdir(join(directory, 'vendor'));
+const { packageManager } = JSON.parse(
+  await readFile(join(projectRoot, 'package.json'), 'utf8'),
+) as { packageManager: string };
 const dependencies: Record<string, string> = {};
 // The consumer owns every shared library, at the version this workspace tests.
 const peers: Record<string, string> = {};
@@ -48,9 +51,8 @@ await writeFile(
       name: 'packed-consumer',
       private: true,
       type: 'module',
-      packageManager: 'pnpm@10.30.1',
+      packageManager,
       dependencies: { ...dependencies, ...peers },
-      pnpm: { overrides: dependencies },
       devDependencies: { '@types/node': '24.13.3', typescript: '5.9.3' },
     },
     null,
@@ -72,10 +74,12 @@ import { billingMigrations } from '@pgstencil/stripe/migrations';
 import { createStripeDev } from '@pgstencil/stripe/testing';
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
+const pgstencilVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.resolve('pgstencil')), 'utf8')).version;
 for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
   const entry = import.meta.resolve(name);
   const manifest = JSON.parse(readFileSync(new URL('../package.json', entry), 'utf8'));
   assert.equal(manifest.name, name);
+  if (name !== 'pgstencil') assert.equal(manifest.peerDependencies.pgstencil, '^' + pgstencilVersion);
   assert.equal(manifest.license, 'MIT');
   assert.equal(manifest.repository.url, 'git+https://github.com/diffplug/pgstencil.git');
   assert.ok(readFileSync(new URL('../LICENSE', entry), 'utf8').startsWith('MIT License'));
@@ -134,10 +138,18 @@ await writeFile(
   }),
 );
 // A shared library outside pgstencil's range, or one nothing provides, fails
-// the install instead of only warning.
+// the install instead of only warning. pnpm 12 reads these settings from the
+// workspace file rather than package.json or .npmrc.
 await writeFile(
-  join(directory, '.npmrc'),
-  'auto-install-peers=false\nstrict-peer-dependencies=true\n',
+  join(directory, 'pnpm-workspace.yaml'),
+  JSON.stringify({
+    overrides: dependencies,
+    autoInstallPeers: false,
+    strictPeerDependencies: true,
+    // A file: tarball peer is reported by its path rather than its version.
+    // verify.ts checks the packed pgstencil peer range explicitly.
+    peerDependencyRules: { allowAny: ['pgstencil'] },
+  }),
 );
 execFileSync('pnpm', ['install', '--ignore-scripts'], {
   cwd: directory,

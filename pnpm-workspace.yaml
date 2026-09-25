@@ -1,9 +1,12 @@
 packages:
   - packages/*
   - examples/*
-onlyBuiltDependencies:
-  - esbuild
-  - workerd
+allowBuilds:
+  cpu-features: false
+  esbuild: true
+  protobufjs: false
+  ssh2: false
+  workerd: true
 
 # Ignore package versions published less than 1 day (1440 min) ago, so a
 # freshly published (possibly compromised or broken) release cannot enter an

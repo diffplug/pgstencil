@@ -3,10 +3,10 @@
   "enabledManagers": ["github-actions", "npm"],
   "dependencyDashboard": true,
   "timezone": "America/Los_Angeles",
-  "schedule": ["* * * * 1"],
+  "schedule": ["* * * * 4"],
   "vulnerabilityAlerts": {
     "description": [
-      "Security fixes must not wait for the Monday window, so this overrides the schedule only.",
+      "Security fixes must not wait for the Thursday window, so this overrides the schedule only.",
       "`minimumReleaseAge` is set here EXPLICITLY. Renovate force-applies `minimumReleaseAge: null` to this block, so omitting it drops the cooldown instead of inheriting it from packageRules. The cooldown guards against a compromised release that gets yanked within a day."
     ],
     "enabled": true,

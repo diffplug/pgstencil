@@ -45,7 +45,7 @@
     "supertest": "^7.2.0",
     "tsx": "^4.20.0",
     "typescript": "^7.0.0",
-    "vitest": "^4.0.0",
+    "vitest": "^5.0.0",
     "wrangler": "^4.130.0"
   },
   "license": "MIT",

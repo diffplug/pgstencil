@@ -16,6 +16,22 @@ Applications declare pgstencil's peer dependencies themselves: `kysely` for ever
 
 Every other dependency is private: pgstencil owns its version and applications do not import it. Better Auth is deliberately private. pgstencil imports its internal subpaths and tests login and linking rules against specific releases, so its range admits patches only. A new login provider or Better Auth plugin belongs in `@pgstencil/auth`, not in an application. Private ranges start at the version pgstencil's CI tested. [`.github/renovate.json`](.github/renovate.json) raises that floor, and re-vendoring carries it into each application.
 
+## Releasing
+
+The three packages share one version. A release is a pull request that raises `version` in all three `package.json` files: a patch for a fix or compatible addition, a minor for a breaking change, since these are 0.x. Nothing else triggers one.
+
+After that merges, [`release.yml`](.github/workflows/release.yml) finds any version npm does not have, waits for `security-audit` to pass on that commit, and **stages** the packages from the `publish` environment, which admits only `main`. A staged package is not public. Approve each one, core first because auth and billing peer on it:
+
+```sh
+npm stage list
+npm stage download <stage-id>   # `dist/provenance.json` must name the audited commit
+npm stage approve <stage-id>    # asks for 2FA
+```
+
+Each package's trusted publisher on npmjs.com names this repository, `release.yml` and the `publish` environment, and leaves "can also publish directly with `npm publish`" unchecked, so the workflow can stage but never publish. Package access is set to require 2FA and disallow tokens. Applications receive an approved release as an ordinary Renovate update. Changes that are not released yet reach an application on a branch through `pnpm pgstencil:sync`.
+
+Version 0.2.0 was published by hand from commit `e79cc4d`, after its audit passed.
+
 ## Application composition
 
 Production imports use `pgstencil`, `pgstencil/postgres`, `@pgstencil/auth` and `@pgstencil/stripe`. Docker startup and test fixtures are opt-in imports through `pgstencil/database`, `pgstencil/testing`, and `@pgstencil/stripe/testing`.

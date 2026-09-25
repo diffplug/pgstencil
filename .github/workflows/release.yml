@@ -1,0 +1,186 @@
+name: release
+
+# Stages the three packages on npm when a commit on `main` carries a version npm
+# does not have yet and `security-audit` passed on that commit. Staging needs no
+# 2FA and a staged package is not public: a maintainer approves each one on
+# npmjs.com or with `npm stage approve`, which does need 2FA (PACKAGES.md ->
+# Releasing). This workflow never publishes, and its trusted publisher on npm
+# must not allow `npm publish`; a stolen workflow can then stage a version but
+# cannot make it public.
+#
+# The file name is load-bearing: npm's trusted publisher for each package names
+# `release.yml` and the `publish` environment, and rejects a token minted by
+# any other workflow or environment.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Each job declares what it needs; nothing is granted at the top.
+permissions: {}
+
+# One release at a time, and never cancel one that is mid-stage.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan
+    # A dispatch from another branch has no audit verdict to wait for.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read # checkout
+      checks: read # the `security-audit` check run on this commit
+    outputs:
+      stage: ${{ steps.versions.outputs.stage }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A package is staged when its version is not on npm. A version that is
+      # staged but not yet approved reads as unpublished here; staging it again
+      # fails loudly rather than replacing it.
+      - name: Find versions npm does not have
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          versions=()
+          missing=()
+          for dir in pgstencil auth stripe; do
+            name=$(jq -r .name "packages/$dir/package.json")
+            version=$(jq -r .version "packages/$dir/package.json")
+            versions+=("$version")
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              "https://registry.npmjs.org/${name/\//%2F}/$version")
+            case "$code" in
+              200) echo "$name@$version is on npm" ;;
+              404) echo "$name@$version is not on npm"; missing+=("$dir") ;;
+              *) echo "::error::npm answered HTTP $code for $name@$version"; exit 1 ;;
+            esac
+          done
+          if [ "$(printf '%s\n' "${versions[@]}" | sort -u | wc -l)" -ne 1 ]; then
+            echo "::error::The packages must share one version, found: ${versions[*]}"
+            exit 1
+          fi
+          # Core first: auth and stripe peer on it, so a consumer can install
+          # each package as soon as it is approved.
+          echo "stage=${missing[*]:-}" >> "$GITHUB_OUTPUT"
+
+      # `security-audit` runs on the same push and takes about twenty minutes;
+      # wait for its verdict on this commit. Any successful run counts, because a
+      # superseded run for the same commit may be cancelled.
+      - name: Require a passing security audit
+        if: steps.versions.outputs.stage != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 3300))
+          while true; do
+            states=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select(.name == "security-audit") | (.conclusion // .status)] | join(" ")')
+            echo "security-audit on $GITHUB_SHA: ${states:-not started}"
+            case " $states " in
+              *" success "*) exit 0 ;;
+              *" in_progress "* | *" queued "* | *" waiting "* | *" pending "* | "  ") ;;
+              *) echo "::error::security-audit did not pass on $GITHUB_SHA"; exit 1 ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::security-audit did not finish in time on $GITHUB_SHA"
+              exit 1
+            fi
+            sleep 60
+          done
+
+  stage:
+    name: stage
+    needs: plan
+    if: needs.plan.outputs.stage != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The npm trusted publisher names this environment. It admits only `main`.
+    environment:
+      name: publish
+    permissions:
+      contents: read # checkout
+      id-token: write # the OIDC token npm exchanges for a stage-only credential
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      # Staging needs npm 11.15 or newer; trusted publishing needs 11.5.1. Node's
+      # bundled npm may be older, so install a pinned one only when it is.
+      - name: Use an npm that can stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          need=11.15.0
+          have=$(npm --version)
+          echo "runner npm: $have"
+          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -1)" != "$need" ]; then
+            npm install --global npm@11.19.1
+            echo "using npm $(npm --version)"
+          fi
+
+      - run: pnpm install --frozen-lockfile
+
+      # Pack exactly what `packages:verify` tests in `check.yml`, and stage those
+      # archives rather than repacking, so the staged bytes carry the commit that
+      # passed the audit in `dist/provenance.json`.
+      - name: Pack the packages
+        run: pnpm packages:pack
+
+      - name: Stage the packages
+        shell: bash
+        env:
+          STAGE: ${{ needs.plan.outputs.stage }}
+        run: |
+          set -uo pipefail
+          failed=0
+          {
+            echo "## Staged for approval"
+            echo
+            echo "Commit \`$GITHUB_SHA\`. Nothing is public until each package is approved with 2FA."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          for dir in $STAGE; do
+            name=$(jq -r .name "packages/$dir/package.json")
+            version=$(jq -r .version "packages/$dir/package.json")
+            archive="dist/packages/$(echo "$name" | sed 's/^@//; s#/#-#')-$version.tgz"
+            echo "::group::npm stage publish $archive"
+            if npm stage publish "$archive" --access public; then
+              echo "- staged \`$name@$version\`" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::Could not stage $name@$version"
+              echo "- **failed** to stage \`$name@$version\`" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          {
+            echo
+            echo "Approve in this order, after checking each staged tarball's \`dist/provenance.json\` names \`$GITHUB_SHA\`:"
+            echo
+            echo '```sh'
+            echo 'npm stage list'
+            echo 'npm stage download <stage-id>   # inspect'
+            echo 'npm stage approve <stage-id>    # asks for 2FA'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$failed"

@@ -32,7 +32,7 @@ Use `PORT=3000 pnpm dev` for a fixed port. Development uses real time so cooldow
 | Email              | Injected `EmailSender`, with `EmailDev` capture, waiting, unread checks and preview routes            |
 | Snapshots          | Vitest file snapshots plus local JSON, response, HTML, Markdown and email captures                    |
 
-The workspace contains `pgstencil`, `@pgstencil/auth`, and `@pgstencil/stripe`. They are not yet published to npm; [PACKAGES.md](PACKAGES.md) explains consumption through compiled local tarballs. The core package's `pgstencil/postgres` export is the runtime connection layer; `pgstencil/database` and `pgstencil/testing` include local Docker infrastructure. `examples/login` is a complete consumer, using Node's HTTP server and native HTML forms. No frontend framework is required.
+The workspace contains `pgstencil`, `@pgstencil/auth`, and `@pgstencil/stripe`. They are published to npm as 0.x releases; [PACKAGES.md](PACKAGES.md) explains installing them and consuming unreleased changes through compiled local tarballs. The core package's `pgstencil/postgres` export is the runtime connection layer; `pgstencil/database` and `pgstencil/testing` include local Docker infrastructure. `examples/login` is a complete consumer, using Node's HTTP server and native HTML forms. No frontend framework is required.
 
 Hono and Cloudflare Workers are supported through the shared Fetch adapter and request-scoped Hyperdrive connections. See [WORKERS.md](WORKERS.md) for the deployable example, local runtime tests, and deployment preparation.
 

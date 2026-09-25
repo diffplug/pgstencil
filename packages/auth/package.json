@@ -1,7 +1,6 @@
 {
   "name": "@pgstencil/auth",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.2.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -48,6 +47,7 @@
     "better-auth-migrations"
   ],
   "publishConfig": {
+    "access": "public",
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
@@ -123,7 +123,7 @@
       }
     }
   },
-  "description": "Email, Google, Apple, Facebook and GitHub authentication for Node, Hono and Cloudflare Workers.",
+  "description": "Email, Google, Apple, Microsoft, Facebook and GitHub authentication for Node, Hono and Cloudflare Workers.",
   "license": "MIT",
   "homepage": "https://github.com/diffplug/pgstencil#readme",
   "repository": {

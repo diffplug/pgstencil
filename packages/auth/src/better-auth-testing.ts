@@ -33,7 +33,7 @@ const ScopedDate: DateConstructor = new Proxy(NativeDate, {
 const scopedCrypto = new Proxy(nativeCrypto, {
   get(target, key) {
     if (key === 'getRandomValues')
-      return (array: ArrayBufferView) => {
+      return (array: ArrayBufferView<ArrayBuffer>) => {
         const random = deterministicScope.getStore()?.random;
         if (!random) return target.getRandomValues(array);
         if (

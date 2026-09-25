@@ -9,6 +9,12 @@ await mkdir(join(directory, 'vendor'));
 const { packageManager } = JSON.parse(
   await readFile(join(projectRoot, 'package.json'), 'utf8'),
 ) as { packageManager: string };
+const { version: typescriptVersion } = JSON.parse(
+  await readFile(
+    join(projectRoot, 'node_modules/typescript/package.json'),
+    'utf8',
+  ),
+) as { version: string };
 const dependencies: Record<string, string> = {};
 // The consumer owns every shared library, at the version this workspace tests.
 const peers: Record<string, string> = {};
@@ -53,7 +59,10 @@ await writeFile(
       type: 'module',
       packageManager,
       dependencies: { ...dependencies, ...peers },
-      devDependencies: { '@types/node': '24.13.3', typescript: '5.9.3' },
+      devDependencies: {
+        '@types/node': '24.13.3',
+        typescript: typescriptVersion,
+      },
     },
     null,
     2,

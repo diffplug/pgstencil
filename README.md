@@ -112,6 +112,8 @@ Persistent development/production databases record applied-file checksums. Editi
 
 `DATABASE_URL` directs status/validate/migrate at an explicitly supplied persistent database. Otherwise they use `pgstencil_dev`. Schema/type commands always use a disposable migrated clone. Never point template management at a production cluster.
 
+Local services run PostgreSQL 18. The 18 image keeps its data under `/var/lib/postgresql/18/docker` and refuses a volume holding a 17 cluster, so the volume is named `postgres-18-data` and an existing checkout starts a fresh development database. The old volume stays until removed with `docker volume rm <project>_postgres-data`; `docker volume ls` lists it.
+
 ## Resource lifecycle
 
 Each checkout has a Compose project name derived from its absolute path, its own network, and a named Postgres volume. Local credentials and resolved ports are cached in ignored `.pgstencil/services.json`. Both exposed service ports bind to loopback. Change image versions in `compose.yaml`, then stop and restart the services; do not change Postgres major versions against an existing volume without a database upgrade.

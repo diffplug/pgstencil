@@ -300,7 +300,7 @@ importers:
         specifier: ^9.0.0
         version: 9.0.0(@types/pg@8.23.1)(pg@8.23.0)
       pg:
-        specifier: ^8.16.0
+        specifier: ^8.23.0
         version: 8.23.0
       testcontainers:
         specifier: ^12.1.0

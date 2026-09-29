@@ -252,7 +252,7 @@ importers:
         version: link:../../packages/pgstencil
       stripe:
         specifier: ^22.6.1
-        version: 22.6.1(@types/node@24.13.3)
+        version: 22.6.2(@types/node@24.13.3)
 
   examples/workers:
     dependencies:
@@ -323,7 +323,7 @@ importers:
         version: link:../pgstencil
       stripe:
         specifier: ^22.6.1
-        version: 22.6.1(@types/node@24.13.3)
+        version: 22.6.2(@types/node@24.13.3)
 
 packages:
 
@@ -2502,8 +2502,8 @@ packages:
     resolution: {integrity: sha512-yDPMNjp4WyfYBkHnjIRLfca1i6KMyGCtsVgoKe/z1+6vukgaENdgGBZt+ZmKPc4gavvEZ5OgHfHdrazhgNyG7w==}
     engines: {node: '>=12'}
 
-  stripe@22.6.1:
-    resolution: {integrity: sha512-hAKSkGeVt2u46TRYhmnvwmVHxBNtOCJnPjc+SH5sP2B2ypElYzAAY3Ljx0Ar8C2w8nfpFQiZ95qoDCDsFkXMTA==}
+  stripe@22.6.2:
+    resolution: {integrity: sha512-PwRE2scocvXqDKPiskMa5vRJEAEkq46W69XyUYmAwrNSLr675lQnfqLwnsndAWizwgihOWw/irLmoFRo3ez7ew==}
     engines: {node: '>=18'}
     peerDependencies:
       '@types/node': '>=18'
@@ -4619,7 +4619,7 @@ snapshots:
     dependencies:
       ansi-regex: 6.3.0
 
-  stripe@22.6.1(@types/node@24.13.3):
+  stripe@22.6.2(@types/node@24.13.3):
     optionalDependencies:
       '@types/node': 24.13.3
 

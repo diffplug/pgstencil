@@ -210,7 +210,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: 2.1.1
-        version: 2.1.1(hono@4.13.7)
+        version: 2.1.1(hono@4.13.10)
       '@pgstencil/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -219,7 +219,7 @@ importers:
         version: 1.7.6(pg@8.23.0)(vitest@5.0.1(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))
       hono:
         specifier: ^4.13.7
-        version: 4.13.7
+        version: 4.13.10
       kysely:
         specifier: ^0.29.5
         version: 0.29.5
@@ -240,7 +240,7 @@ importers:
         version: link:../../packages/stripe
       hono:
         specifier: ^4.13.7
-        version: 4.13.7
+        version: 4.13.10
       kysely:
         specifier: ^0.29.5
         version: 0.29.5
@@ -261,7 +261,7 @@ importers:
         version: link:../../packages/auth
       hono:
         specifier: ^4.13.7
-        version: 4.13.7
+        version: 4.13.10
       kysely:
         specifier: ^0.29.5
         version: 0.29.5
@@ -283,7 +283,7 @@ importers:
     devDependencies:
       hono:
         specifier: ^4.13.7
-        version: 4.13.7
+        version: 4.13.10
       kysely:
         specifier: ^0.29.5
         version: 0.29.5
@@ -1951,8 +1951,8 @@ packages:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
 
-  hono@4.13.7:
-    resolution: {integrity: sha512-c8/gF9ac8Y78/agExVocyLevgR+JlpNB444Py0FSX8pJoPdYUfUzRcXtYEYGwt6l19qIlVZPN5Mfsw9jFShmQQ==}
+  hono@4.13.10:
+    resolution: {integrity: sha512-dQuLsa5oO+47QVMVMaaD9cIv8ctmVtK1iRvwWngkfloFJMeFeuoUFDswIqZGxmGX3hrRzREgEArjkK9OgsQEhA==}
     engines: {node: '>=16.9.0'}
 
   htmlparser2@10.1.0:
@@ -3168,9 +3168,9 @@ snapshots:
       protobufjs: 7.6.6
       yargs: 17.7.3
 
-  '@hono/node-server@2.1.1(hono@4.13.7)':
+  '@hono/node-server@2.1.1(hono@4.13.10)':
     dependencies:
-      hono: 4.13.7
+      hono: 4.13.10
 
   '@img/colour@1.1.0': {}
 
@@ -4177,7 +4177,7 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hono@4.13.7: {}
+  hono@4.13.10: {}
 
   htmlparser2@10.1.0:
     dependencies:

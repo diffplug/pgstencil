@@ -23,7 +23,7 @@
     "./better-auth-workers": "./src/better-auth-workers.ts"
   },
   "dependencies": {
-    "better-auth": "~1.7.3",
+    "better-auth": "~1.7.6",
     "jose": "^6.2.12",
     "openid-client": "^6.8.8"
   },

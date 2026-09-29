@@ -294,7 +294,7 @@ importers:
   packages/pgstencil:
     dependencies:
       cheerio:
-        specifier: ^1.1.0
+        specifier: ^1.2.0
         version: 1.2.0
       node-pg-migrate:
         specifier: ^9.0.0

@@ -166,6 +166,53 @@ test('Better Auth email: repeatable cookies, database and email snapshots across
   expect(plan.toBeAddedIndexes).toEqual([]);
 });
 
+test('Better Auth email rejects the entire reserved identity namespace before sending or signing in', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture();
+  onTestFinished(() => f.close());
+  for (const email of [
+    'plain@identity.pgstencil.invalid',
+    'PLAIN@IDENTITY.PGSTENCIL.INVALID',
+    'sub@a.identity.pgstencil.invalid',
+    'SUB@A.B.IDENTITY.PGSTENCIL.INVALID',
+    'dotted@identity.pgstencil.invalid.',
+    'dotted@a.identity.pgstencil.invalid.',
+  ]) {
+    for (const path of [
+      'email-otp/send-verification-otp',
+      'sign-in/email-otp',
+    ]) {
+      const response = await f.post(path, {
+        email,
+        type: 'sign-in',
+        otp: '12345678',
+      });
+      expect(response.status, `${path}: ${email}`).toBe(400);
+      expect(response.body).toEqual({ message: 'Invalid email' });
+    }
+  }
+  expect(f.email.all()).toEqual([]);
+  expect(await queryDatabase(f.database.url, 'SELECT id FROM "user"')).toEqual(
+    [],
+  );
+  expect(
+    await queryDatabase(f.database.url, 'SELECT id FROM verification'),
+  ).toEqual([]);
+  // Similar domain names remain ordinary delivery addresses.
+  for (const email of [
+    'user@notidentity.pgstencil.invalid',
+    'user@identity.pgstencil.invalid.example.test',
+  ]) {
+    const response = await f.post('email-otp/send-verification-otp', {
+      email,
+      type: 'sign-in',
+    });
+    expect(response.status, email).toBe(200);
+    expect((await f.email.next()).to).toEqual([email]);
+  }
+});
+
 test('Better Auth time: 23 hours, expiration boundary, isolated async contexts and unchanged host clock', async ({
   onTestFinished,
 }) => {

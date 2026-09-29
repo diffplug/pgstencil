@@ -1,9 +1,16 @@
 import { createHash } from 'node:crypto';
 
-const identityDomain = '@identity.pgstencil.invalid';
+const identityDomain = 'identity.pgstencil.invalid';
 
 export function isIdentityEmail(email: string) {
-  return email.toLowerCase().endsWith(identityDomain);
+  const at = email.lastIndexOf('@');
+  if (at === -1) return false;
+  // Reserve the whole DNS namespace, including an optional trailing root dot.
+  const domain = email
+    .slice(at + 1)
+    .toLowerCase()
+    .replace(/\.$/, '');
+  return domain === identityDomain || domain.endsWith('.' + identityDomain);
 }
 
 /** Better Auth requires an email column, even for a provider-only account.
@@ -21,7 +28,9 @@ export function identityEmail(
   return (
     createHash('sha256')
       .update(JSON.stringify([provider, clientId, String(subject)]))
-      .digest('hex') + identityDomain
+      .digest('hex') +
+    '@' +
+    identityDomain
   );
 }
 

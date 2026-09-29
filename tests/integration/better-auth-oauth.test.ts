@@ -720,6 +720,9 @@ test('Optional email never accepts a supplied but unverified email or invalid OI
   onTestFinished(() => f.close());
   for (const options of [
     { verified: false },
+    { email: 'sub@a.identity.pgstencil.invalid' },
+    { email: 'SUB@A.B.IDENTITY.PGSTENCIL.INVALID' },
+    { email: 'dotted@identity.pgstencil.invalid.' },
     { email: '', badSignature: true },
     { email: '', claims: { nonce: 'wrong' } },
     {

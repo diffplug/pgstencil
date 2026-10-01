@@ -4,7 +4,7 @@
   "type": "module",
   "dependencies": {
     "@hono/node-server": "2.1.1",
-    "better-auth": "1.7.6",
+    "better-auth": "1.7.7",
     "hono": "^4.13.7",
     "kysely": "^0.29.5",
     "pg": "^8.16.0",

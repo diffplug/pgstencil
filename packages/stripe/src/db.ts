@@ -27,6 +27,9 @@ export interface BillingDB {
     owner_id: string;
     price_id: string;
     status: string;
+    /** Null on rows synchronized before migration 004, until the next sync. */
+    started_at: Timestamp | null;
+    ended_at: Timestamp | null;
     period_end: Timestamp;
     trial_end: Timestamp | null;
     cancel_at_period_end: boolean;

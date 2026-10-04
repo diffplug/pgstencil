@@ -1,6 +1,6 @@
 # @pgstencil/stripe
 
-Stripe SaaS subscriptions, card-required trials, durable webhooks, and a local payment simulator for pgstencil.
+Stripe SaaS subscriptions with named plans, optional card-required trials, durable webhooks, and a local payment simulator for pgstencil.
 
 > **Built for our own applications.** pgstencil is developed alongside DiffPlug's products and published so they can share it. It is 0.x: a minor release may break compatibility, and there is no support promise.
 

@@ -64,8 +64,10 @@ fixed rows, so arbitrary identities cannot grow a lock table without bound.
 Stripe webhook verification is asynchronous and uses Web Crypto. On Workers,
 construct the Stripe SDK with `httpClient: Stripe.createFetchHttpClient()` and
 `await billing.webhook(rawBody, signature)`. `verifyWebhook()` is now asynchronous
-too. The runnable Workers example currently covers authentication; billing retains
-its independent Node integration suite.
+too. The runnable Workers example covers authentication;
+`tests/integration/billing-workers.test.ts` runs billing in workerd with the fetch
+client, Web Crypto webhook verification and Hyperdrive. No billing code needs a
+Node-only API at runtime; `@pgstencil/stripe/testing` and `/migrations` are Node-side.
 
 For deployment details, use Cloudflare's [Hyperdrive setup](https://developers.cloudflare.com/hyperdrive/get-started/)
 and [query caching documentation](https://developers.cloudflare.com/hyperdrive/concepts/query-caching/).

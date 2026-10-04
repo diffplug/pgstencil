@@ -515,10 +515,11 @@ export async function oauthRequest(
     } catch {
       return fail('invalid_browser_binding');
     }
+    // Mirrors better-auth's internal getAuthStateVerificationIdentifier (1.7.7+).
     const result = await sql<{
       value: string;
       expiresAt: Date;
-    }>`SELECT value, "expiresAt" FROM verification WHERE identifier = ${state} ORDER BY "createdAt" DESC LIMIT 1`.execute(
+    }>`SELECT value, "expiresAt" FROM verification WHERE identifier = ${'auth-state:' + state} ORDER BY "createdAt" DESC LIMIT 1`.execute(
       options.database,
     );
     const row = result.rows[0];

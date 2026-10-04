@@ -131,8 +131,8 @@ export class Billing<P extends string = string> {
   private planOf(priceId: string | null | undefined): P | null {
     return (priceId && this.plans.get(priceId)) || null;
   }
-  /** The Price a checkout started now would offer for `plan`. */
-  async offeredPrice(plan: P): Promise<string> {
+  /** The Price a checkout started now would offer for `plan`. Unknown plans throw BillingError(400). */
+  async offeredPrice(plan: string): Promise<string> {
     const prices = this.offers.get(plan);
     if (!prices) throw new BillingError('Unknown plan.', 400);
     const price = await prices.offer(this as Billing<string>);
@@ -201,7 +201,8 @@ export class Billing<P extends string = string> {
   async checkout(
     ownerId: string,
     email: string,
-    plan: P,
+    /** Any configured plan name; untrusted input is fine, since unknown names throw BillingError(400). */
+    plan: string,
   ): Promise<{ id: string; url: string }> {
     // Resolved before any Stripe write: an unknown plan or a bad offer creates nothing.
     const price = await this.offeredPrice(plan);

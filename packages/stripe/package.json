@@ -1,6 +1,6 @@
 {
   "name": "@pgstencil/stripe",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -42,7 +42,7 @@
       }
     }
   },
-  "description": "Stripe SaaS subscriptions, card-required trials, durable webhooks, and a local payment simulator for pgstencil.",
+  "description": "Stripe SaaS subscriptions with named plans, optional card-required trials, durable webhooks, and a local payment simulator for pgstencil.",
   "license": "MIT",
   "homepage": "https://github.com/diffplug/pgstencil#readme",
   "repository": {

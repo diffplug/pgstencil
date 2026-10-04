@@ -37,7 +37,6 @@ import {
   BillingError,
   type BillingConfig,
   type BillingDB,
-  type Plan,
   type Stripe,
 } from '@pgstencil/stripe';
 import type { Kysely } from 'kysely';
@@ -476,7 +475,7 @@ export async function startApp(config: AppConfig) {
                   await billing.checkout(
                     session.user_id,
                     session.email,
-                    form.get('plan') as Plan,
+                    form.get('plan') ?? '',
                   )
                 ).url,
               );

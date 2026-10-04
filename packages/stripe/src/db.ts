@@ -3,7 +3,8 @@ type Timestamp = ColumnType<Date, Date | string, Date | string>;
 export interface BillingDB {
   accounts: {
     owner_id: string;
-    email: string;
+    /** Null when the owner has none; Stripe Checkout then collects one. */
+    email: string | null;
     created_at: Timestamp;
     trial_used_at: Timestamp | null;
     customer_id: string | null;
@@ -27,6 +28,9 @@ export interface BillingDB {
     owner_id: string;
     price_id: string;
     status: string;
+    /** Null on rows synchronized before migration 004, until the next sync. */
+    started_at: Timestamp | null;
+    ended_at: Timestamp | null;
     period_end: Timestamp;
     trial_end: Timestamp | null;
     cancel_at_period_end: boolean;

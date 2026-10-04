@@ -11,11 +11,21 @@ import { dirname } from 'node:path';
 import { token, type Time, type RandomSource } from 'pgstencil';
 import { Stripe, STRIPE_API_VERSION } from './index.ts';
 
+export interface StripeDevOptions {
+  /**
+   * Price ID → billing interval for each recurring Price beyond the built-in
+   * `price_dev_monthly` and `price_dev_yearly`. Subscription Checkout rejects
+   * any other Price, as Stripe does.
+   */
+  recurring?: Record<string, 'month' | 'year'>;
+}
+
 /** Stateful, local Stripe substitute. Uses the real SDK and webhook signatures. */
 export async function createStripeDev(
   time: Time,
   random: RandomSource,
   statePath?: string,
+  options: StripeDevOptions = {},
 ) {
   const customers = new Map<string, Record<string, unknown>>();
   const checkouts = new Map<string, Stripe.Checkout.Session>();
@@ -60,6 +70,11 @@ export async function createStripeDev(
     saved = text;
   }
   const prices = { monthly: 'price_dev_monthly', yearly: 'price_dev_yearly' };
+  const intervals = new Map<string, 'month' | 'year'>([
+    [prices.monthly, 'month'],
+    [prices.yearly, 'year'],
+    ...Object.entries(options.recurring ?? {}),
+  ]);
   const webhookSecret = 'whsec_pgstencil_local_only';
   let origin = '';
   let webhookTarget: string | undefined;
@@ -82,7 +97,8 @@ export async function createStripeDev(
   }
   function periodEnd(price: string) {
     const end = time.now();
-    if (price === prices.yearly) end.setUTCFullYear(end.getUTCFullYear() + 1);
+    if (intervals.get(price) === 'year')
+      end.setUTCFullYear(end.getUTCFullYear() + 1);
     else end.setUTCMonth(end.getUTCMonth() + 1);
     return Math.floor(end.getTime() / 1000);
   }
@@ -102,6 +118,9 @@ export async function createStripeDev(
       customer: session.customer,
       livemode: false,
       status: days ? 'trialing' : 'active',
+      start_date: seconds(),
+      ended_at: null,
+      canceled_at: null,
       trial_end: days ? seconds() + days * 86400 : null,
       cancel_at_period_end: false,
       metadata: {
@@ -156,8 +175,12 @@ export async function createStripeDev(
     const sub = subscriptions.get(subscriptionId);
     if (!sub) throw new Error('Subscription not found');
     if (action === 'cancel-at-period-end') sub.cancel_at_period_end = true;
-    else if (action === 'cancel') sub.status = 'canceled';
-    else {
+    else if (action === 'cancel') {
+      // An immediate cancellation, as when an application refunds.
+      sub.status = 'canceled';
+      sub.canceled_at = seconds();
+      sub.ended_at = seconds();
+    } else {
       sub.status = action === 'renew' ? 'active' : 'past_due';
       sub.items.data[0]!.current_period_end = periodEnd(
         sub.items.data[0]!.price.id,
@@ -296,6 +319,11 @@ export async function createStripeDev(
             ],
           };
         }
+        if (
+          session.mode === 'subscription' &&
+          !intervals.has(body.get('line_items[0][price]') ?? '')
+        )
+          throw new Error('No such price');
         checkouts.set(sessionId, session);
         parameters.set(sessionId, body);
         result = session;

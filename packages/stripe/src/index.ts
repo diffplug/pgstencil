@@ -6,10 +6,19 @@ import type { BillingDB } from './db.ts';
 export type { BillingDB } from './db.ts';
 export { Stripe };
 export const STRIPE_API_VERSION = Stripe.API_VERSION;
-export type Plan = 'monthly' | 'yearly';
-export interface BillingConfig {
-  prices: Record<Plan, string>;
+/** Several Stripe Prices for one plan, and the server-side choice of which one checkout offers. */
+export interface PlanPrices {
+  /** Every Price that grants this plan: the one offered now, earlier ones, and any later steps. */
+  recognized: readonly string[];
+  /** Chooses the Price a new checkout offers; it must be one of `recognized`. */
+  offer: (billing: Billing<string>) => string | Promise<string>;
+}
+export interface BillingConfig<P extends string = string> {
+  /** Plan name → its Stripe Price, or several Prices with a choice of which to offer. */
+  prices: Record<P, string | PlanPrices>;
   trialDays: number;
+  /** Opt in to Stripe Managed Payments (merchant of record) on every Checkout Session. */
+  managedPayments?: boolean;
   webhookSecret: string;
   live: boolean;
   origin: string;
@@ -27,6 +36,9 @@ export class BillingError extends Error {
   }
 }
 const OPEN = ['pending', 'open'];
+/** Subscriptions that never held a purchase, or that Stripe no longer lists. */
+const UNPURCHASED = ['incomplete', 'incomplete_expired', 'missing'];
+const PLAN_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const SUBSCRIBED = [
   'trialing',
   'active',
@@ -46,18 +58,21 @@ const STRIPE_REDIRECT_ORIGINS = [
 ];
 
 /** Owns billing state; HTTP adapters supply an already-authorized owner ID. */
-export class Billing {
+export class Billing<P extends string = string> {
   readonly db: Kysely<BillingDB>;
   readonly returnUrl: string;
   /** Hosts a caller must allow in its CSP form-action for Checkout to work. */
   readonly redirectOrigins: readonly string[];
-  private readonly plans: ReadonlyMap<string, Plan>;
+  /** Plan name → the Prices that grant it and the choice of which to offer. */
+  private readonly offers: ReadonlyMap<string, PlanPrices>;
+  /** Every recognized Price → the plan it grants. */
+  private readonly plans: ReadonlyMap<string, P>;
   constructor(
     db: Kysely<BillingDB>,
     readonly stripe: Stripe,
     readonly time: Time,
     readonly random: RandomSource,
-    readonly config: BillingConfig,
+    readonly config: BillingConfig<P>,
   ) {
     this.db = db.withSchema('pgstencil_billing');
     if (
@@ -66,12 +81,6 @@ export class Billing {
       config.trialDays > 730
     )
       throw new Error('trialDays must be an integer between 0 and 730');
-    if (
-      !config.prices.monthly ||
-      !config.prices.yearly ||
-      config.prices.monthly === config.prices.yearly
-    )
-      throw new Error('Configure distinct monthly and yearly Stripe prices');
     if (!config.webhookSecret)
       throw new Error('A Stripe webhook secret is required');
     if (new URL(config.origin).origin !== config.origin)
@@ -86,16 +95,50 @@ export class Billing {
     for (const value of this.redirectOrigins)
       if (new URL(value).origin !== value)
         throw new Error('Billing redirect origins must be origins only');
-    this.plans = new Map(
-      (Object.entries(config.prices) as [Plan, string][]).map(([plan, id]) => [
-        id,
-        plan,
-      ]),
-    );
+    const offers = new Map<string, PlanPrices>();
+    const plans = new Map<string, P>();
+    for (const [plan, value] of Object.entries(config.prices) as [
+      P,
+      string | PlanPrices,
+    ][]) {
+      if (!PLAN_NAME.test(plan))
+        throw new Error('Plan names must be 1-64 letters, digits, _ or -');
+      const prices =
+        typeof value === 'string'
+          ? { recognized: [value], offer: () => value }
+          : value;
+      if (!prices.recognized.length || typeof prices.offer !== 'function')
+        throw new Error(`Plan ${plan} needs a Stripe price`);
+      for (const id of prices.recognized) {
+        if (typeof id !== 'string' || !id)
+          throw new Error(`Plan ${plan} has an empty Stripe price`);
+        if (plans.has(id))
+          throw new Error('Each Stripe price must belong to exactly one plan');
+        plans.set(id, plan);
+      }
+      offers.set(plan, prices);
+    }
+    if (!offers.size) throw new Error('Configure at least one plan');
+    this.offers = offers;
+    this.plans = plans;
+    if (
+      config.managedPayments !== undefined &&
+      typeof config.managedPayments !== 'boolean'
+    )
+      throw new Error('managedPayments must be a boolean');
   }
-  /** A retired price no longer maps to a plan, so report it as unknown. */
-  private planOf(priceId: string | null | undefined): Plan | null {
+  /** A price removed from the configuration no longer maps to a plan, so report it as unknown. */
+  private planOf(priceId: string | null | undefined): P | null {
     return (priceId && this.plans.get(priceId)) || null;
+  }
+  /** The Price a checkout started now would offer for `plan`. Unknown plans throw BillingError(400). */
+  async offeredPrice(plan: string): Promise<string> {
+    const prices = this.offers.get(plan);
+    if (!prices) throw new BillingError('Unknown plan.', 400);
+    const price = await prices.offer(this as Billing<string>);
+    if (!prices.recognized.includes(price))
+      throw new Error(`Plan ${plan} offered a price it does not recognize`);
+    return price;
   }
   private assertRetryable(startedAt: Date, what: string): void {
     if (this.time.now().getTime() - startedAt.getTime() >= RETRY_WINDOW_MS)
@@ -103,10 +146,14 @@ export class Billing {
         `${what} creation needs reconciliation before retrying.`,
       );
   }
-  /** Ensures the owner has a billing account row. Safe to call on every view. */
-  async account(ownerId: string, email: string): Promise<void> {
-    if (!ownerId || !email)
-      throw new Error('Billing requires an owner and email');
+  /**
+   * Ensures the owner has a billing account row. Safe to call on every view.
+   * `email` is null for an owner without one: Stripe Checkout then collects
+   * it. The first call's email is the Stripe customer's; later calls keep it.
+   */
+  async account(ownerId: string, email: string | null): Promise<void> {
+    if (!ownerId || email === '')
+      throw new Error('Billing requires an owner, and an email or null');
     await this.db
       .insertInto('accounts')
       .values({
@@ -121,7 +168,10 @@ export class Billing {
       .onConflict((c) => c.column('owner_id').doNothing())
       .execute();
   }
-  private async customer(ownerId: string, email: string): Promise<string> {
+  private async customer(
+    ownerId: string,
+    email: string | null,
+  ): Promise<string> {
     await this.account(ownerId, email);
     const account = await this.db.transaction().execute(async (trx) => {
       let row = await trx
@@ -145,7 +195,11 @@ export class Billing {
     if (account.customer_id) return account.customer_id;
     this.assertRetryable(account.customer_started_at!, 'Customer');
     const customer = await this.stripe.customers.create(
-      { email: account.email, metadata: { pgstencil_owner: ownerId } },
+      {
+        // Without one, Checkout asks the buyer and sets it on the customer.
+        ...(account.email ? { email: account.email } : {}),
+        metadata: { pgstencil_owner: ownerId },
+      },
       { idempotencyKey: account.customer_key! },
     );
     await this.db
@@ -157,11 +211,13 @@ export class Billing {
   }
   async checkout(
     ownerId: string,
-    email: string,
-    plan: Plan,
+    /** The owner's email, or null to let Checkout collect it. */
+    email: string | null,
+    /** Any configured plan name; untrusted input is fine, since unknown names throw BillingError(400). */
+    plan: string,
   ): Promise<{ id: string; url: string }> {
-    if (plan !== 'monthly' && plan !== 'yearly')
-      throw new BillingError('Choose monthly or yearly.', 400);
+    // Resolved before any Stripe write: an unknown plan or a bad offer creates nothing.
+    const price = await this.offeredPrice(plan);
     const customer = await this.customer(ownerId, email);
     await this.reconcile(ownerId);
     let operation = await this.db.transaction().execute(async (trx) => {
@@ -200,7 +256,7 @@ export class Billing {
           id: token(this.random),
           owner_id: ownerId,
           plan,
-          price_id: this.config.prices[plan],
+          price_id: price,
           trial_days: account.trial_used_at ? 0 : this.config.trialDays,
           status: 'pending',
           session_id: null,
@@ -225,6 +281,9 @@ export class Billing {
           line_items: [{ price: operation.price_id, quantity: 1 }],
           payment_method_collection: 'always',
           payment_method_types: ['card'],
+          ...(this.config.managedPayments
+            ? { managed_payments: { enabled: true } }
+            : {}),
           subscription_data: {
             metadata: {
               pgstencil_owner: ownerId,
@@ -390,6 +449,8 @@ export class Billing {
         owner_id: ownerId,
         price_id: item.price.id,
         status: sub.status,
+        started_at: instant(sub.start_date),
+        ended_at: sub.ended_at === null ? null : instant(sub.ended_at),
         period_end: instant(item.current_period_end),
         trial_end: sub.trial_end === null ? null : instant(sub.trial_end),
         cancel_at_period_end: sub.cancel_at_period_end,
@@ -418,6 +479,8 @@ export class Billing {
             owner_id: eb.ref('excluded.owner_id'),
             price_id: eb.ref('excluded.price_id'),
             status: eb.ref('excluded.status'),
+            started_at: eb.ref('excluded.started_at'),
+            ended_at: eb.ref('excluded.ended_at'),
             period_end: eb.ref('excluded.period_end'),
             trial_end: eb.ref('excluded.trial_end'),
             cancel_at_period_end: eb.ref('excluded.cancel_at_period_end'),
@@ -486,6 +549,54 @@ export class Billing {
       // What a checkout started now would grant, so callers render one value.
       trialDays: trialEligible ? this.config.trialDays : 0,
     };
+  }
+  /**
+   * Completed purchases per Price, from synchronized rows without network
+   * requests. A subscription counts unless Stripe never completed its first
+   * payment (`incomplete`, `incomplete_expired`), no longer lists it
+   * (`missing`), or it ended no later than its trial or within `refundDays`
+   * of starting. Stripe does not tell pgstencil about refunds: an application
+   * that refunds also cancels immediately, inside that window.
+   */
+  async purchaseCounts(
+    prices: readonly string[],
+    options: { refundDays: number },
+  ): Promise<Record<string, number>> {
+    const { refundDays } = options;
+    if (!Number.isInteger(refundDays) || refundDays < 0 || refundDays > 730)
+      throw new Error('refundDays must be an integer between 0 and 730');
+    const counts: Record<string, number> = Object.fromEntries(
+      prices.map((price) => [price, 0]),
+    );
+    if (!prices.length) return counts;
+    const rows = await this.db
+      .selectFrom('subscriptions')
+      .select(['price_id', (eb) => eb.fn.countAll<string>().as('count')])
+      .where('price_id', 'in', prices)
+      .where('status', 'not in', UNPURCHASED)
+      .where((eb) =>
+        eb.or([
+          eb('ended_at', 'is', null),
+          eb.and([
+            eb.or([
+              eb('trial_end', 'is', null),
+              eb('ended_at', '>', eb.ref('trial_end')),
+            ]),
+            eb.or([
+              eb('started_at', 'is', null),
+              eb(
+                'ended_at',
+                '>=',
+                sql<Date>`started_at + make_interval(days => ${refundDays})`,
+              ),
+            ]),
+          ]),
+        ]),
+      )
+      .groupBy('price_id')
+      .execute();
+    for (const row of rows) counts[row.price_id] = Number(row.count);
+    return counts;
   }
   /** Throws BillingError(400) for anything the sender got wrong. */
   async verifyWebhook(

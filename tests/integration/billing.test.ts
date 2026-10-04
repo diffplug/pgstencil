@@ -7,31 +7,58 @@ import { createTestContext } from '../../packages/pgstencil/src/testing.ts';
 import { connectDatabase } from '../../packages/pgstencil/src/database.ts';
 import {
   Billing,
+  BillingError,
   STRIPE_API_VERSION,
+  type BillingConfig,
   type BillingDB,
 } from '../../packages/stripe/src/index.ts';
 import { appMigrations } from '../../examples/login/src/migrations.ts';
-import { createStripeDev } from '../../packages/stripe/src/testing.ts';
+import {
+  createStripeDev,
+  type StripeDevOptions,
+} from '../../packages/stripe/src/testing.ts';
 import { stableJson } from '../../packages/pgstencil/src/snapshots.ts';
 
-async function fixture() {
+async function fixture(
+  options: {
+    config?: (
+      dev: Awaited<ReturnType<typeof createStripeDev>>,
+    ) => Partial<BillingConfig>;
+    dev?: StripeDevOptions;
+  } = {},
+) {
   const context = await createTestContext({
     migrations: appMigrations,
   });
-  const dev = await createStripeDev(context.time, context.random);
+  const dev = await createStripeDev(
+    context.time,
+    context.random,
+    undefined,
+    options.dev,
+  );
   const db = connectDatabase<BillingDB>(context.database.url);
-  const billing = new Billing(db, dev.stripe, context.time, context.random, {
+  const config: BillingConfig = {
     prices: dev.prices,
     trialDays: 14,
     webhookSecret: dev.webhookSecret,
     live: false,
     origin: 'https://example.test',
-  });
+    ...options.config?.(dev),
+  };
+  const billing = new Billing(
+    db,
+    dev.stripe,
+    context.time,
+    context.random,
+    config,
+  );
   return {
     ...context,
     dev,
+    db,
+    config,
     billing,
-    async start(plan: 'monthly' | 'yearly' = 'monthly', owner = 'alice') {
+    async start(plan = 'monthly', owner = 'alice') {
       const checkout = await billing.checkout(
         owner,
         `${owner}@example.test`,
@@ -100,6 +127,35 @@ billingTest(
     await f.billing.webhook(signed.body, signed.signature, apply);
     expect(calls).toBe(1);
     expect((await f.billing.status('alice')).access).toBe(true);
+  },
+);
+
+billingTest(
+  'an owner without an email checks out with Checkout collecting it',
+  async ({ f }) => {
+    const checkout = await f.billing.checkout('alice', null, 'monthly');
+    const created = f.dev.requests.find(
+      (r) => r.method === 'POST' && r.path === '/v1/customers',
+    )!;
+    // No email is sent, so Stripe's hosted page asks the buyer for one.
+    expect(created.body).toEqual({ 'metadata[pgstencil_owner]': 'alice' });
+    expect(
+      (
+        await f.billing.db
+          .selectFrom('accounts')
+          .select('email')
+          .executeTakeFirstOrThrow()
+      ).email,
+    ).toBeNull();
+    const session = [...f.dev.checkouts.values()].find(
+      (s) => s.url === checkout.url,
+    )!;
+    f.dev.completeCheckout(session.id);
+    await f.deliver();
+    expect((await f.billing.status('alice')).access).toBe(true);
+    await expect(f.billing.account('bob', '')).rejects.toThrow(
+      'an email or null',
+    );
   },
 );
 
@@ -354,5 +410,221 @@ billingTest(
     expect(JSON.stringify(records)).not.toContain('private payment payload');
     expect(JSON.stringify(records)).not.toContain('alice@example.test');
     expect(JSON.stringify(records)).not.toContain(signed.signature);
+  },
+);
+
+const ladder = ['price_founding_50', 'price_founding_60'];
+const seatsPerCohort = 2;
+const foundingTest = test.extend<{ f: Awaited<ReturnType<typeof fixture>> }>({
+  f: async ({}, use) => {
+    const f = await fixture({
+      dev: { recurring: { [ladder[0]!]: 'year', [ladder[1]!]: 'year' } },
+      config: (dev) => ({
+        prices: {
+          ...dev.prices,
+          founding: {
+            recognized: ladder,
+            async offer(billing) {
+              const sold = await billing.purchaseCounts(ladder, {
+                refundDays: 30,
+              });
+              return (
+                ladder.find((price) => sold[price]! < seatsPerCohort) ??
+                ladder.at(-1)!
+              );
+            },
+          },
+        },
+        trialDays: 0,
+        managedPayments: true,
+      }),
+    });
+    try {
+      await use(f);
+    } finally {
+      await f.close();
+    }
+  },
+});
+const checkoutPrices = (f: Awaited<ReturnType<typeof fixture>>) =>
+  f.dev.requests
+    .filter((r) => r.path === '/v1/checkout/sessions')
+    .map((r) => r.body['line_items[0][price]']);
+
+foundingTest(
+  'named plans: the server picks the founding price, an open checkout keeps it, and a refund returns the seat',
+  async ({ f }) => {
+    const buy = async (owner: string) => {
+      const { session } = await f.start('founding', owner);
+      f.dev.completeCheckout(session.id);
+      await f.deliver();
+    };
+    await buy('alice');
+    const creation = f.dev.requests.find(
+      (r) => r.path === '/v1/checkout/sessions',
+    )!.body;
+    expect(creation).toMatchObject({
+      'managed_payments[enabled]': 'true',
+      'line_items[0][price]': ladder[0],
+    });
+    expect(creation['subscription_data[trial_period_days]']).toBeUndefined();
+    expect(await f.billing.status('alice')).toMatchObject({
+      access: true,
+      plan: 'founding',
+      trialDays: 0,
+      accessUntil: new Date('2021-01-01T00:00:00Z'),
+    });
+    // Erin opens at the first cohort's price, then the cohort sells out.
+    const erin = await f.start('founding', 'erin');
+    await buy('bob');
+    expect(await f.billing.offeredPrice('founding')).toBe(ladder[1]);
+    const retry = await f.start('founding', 'erin');
+    expect(retry.checkout.id).toBe(erin.checkout.id);
+    f.dev.completeCheckout(erin.session.id);
+    await f.deliver();
+    expect(await f.billing.purchaseCounts(ladder, { refundDays: 30 })).toEqual({
+      [ladder[0]!]: 3,
+      [ladder[1]!]: 0,
+    });
+    await buy('carol');
+    expect(checkoutPrices(f)).toEqual([
+      ladder[0],
+      ladder[0],
+      ladder[0],
+      ladder[1],
+    ]);
+    // A refund cancels at once, inside the window: the seat returns.
+    const alice = await f.billing.status('alice');
+    f.dev.transition(alice.subscription!.id, 'cancel');
+    await f.deliver();
+    expect((await f.billing.status('alice')).access).toBe(false);
+    // A founder who leaves after the refund window keeps the seat counted.
+    f.time.advanceDays(31);
+    const bob = await f.billing.status('bob');
+    f.dev.transition(bob.subscription!.id, 'cancel');
+    await f.deliver();
+    expect(await f.billing.purchaseCounts(ladder, { refundDays: 30 })).toEqual({
+      [ladder[0]!]: 2,
+      [ladder[1]!]: 1,
+    });
+    expect(
+      await f.billing.purchaseCounts([...ladder, 'price_unsold'], {
+        refundDays: 0,
+      }),
+    ).toEqual({ [ladder[0]!]: 3, [ladder[1]!]: 1, price_unsold: 0 });
+  },
+);
+
+billingTest(
+  'a trial canceled before it ends, or a first payment never completed, is not a purchase',
+  async ({ f }) => {
+    const { session } = await f.start();
+    const sub = f.dev.completeCheckout(session.id);
+    await f.deliver();
+    const count = () =>
+      f.billing.purchaseCounts([f.dev.prices.monthly], { refundDays: 0 });
+    expect(await count()).toEqual({ [f.dev.prices.monthly]: 1 });
+    f.time.advanceDays(3);
+    f.dev.transition(sub.id, 'cancel');
+    await f.deliver();
+    expect(await count()).toEqual({ [f.dev.prices.monthly]: 0 });
+    // Rows Stripe never completed or no longer lists hold no seat; a row
+    // synchronized before started_at existed still counts.
+    const row = (id: string, status: string, started_at: Date | null) => ({
+      id,
+      owner_id: 'alice',
+      price_id: f.dev.prices.monthly,
+      status,
+      started_at,
+      ended_at: null,
+      period_end: f.time.now(),
+      trial_end: null,
+      cancel_at_period_end: false,
+      updated_at: f.time.now(),
+    });
+    await f.billing.db
+      .insertInto('subscriptions')
+      .values([
+        row('sub_incomplete', 'incomplete', f.time.now()),
+        row('sub_expired', 'incomplete_expired', f.time.now()),
+        row('sub_missing', 'missing', f.time.now()),
+        row('sub_legacy', 'active', null),
+      ])
+      .execute();
+    expect(await count()).toEqual({ [f.dev.prices.monthly]: 1 });
+    await expect(
+      f.billing.purchaseCounts([], { refundDays: -1 }),
+    ).rejects.toThrow('refundDays');
+  },
+);
+
+billingTest(
+  'a retired price keeps granting its plan and is never offered',
+  async ({ f }) => {
+    const { session } = await f.start();
+    f.dev.completeCheckout(session.id);
+    await f.deliver();
+    const next = new Billing(f.db, f.dev.stripe, f.time, f.random, {
+      ...f.config,
+      prices: {
+        monthly: {
+          recognized: ['price_dev_monthly_v2', f.dev.prices.monthly],
+          offer: () => 'price_dev_monthly_v2',
+        },
+        yearly: f.dev.prices.yearly,
+      },
+    });
+    await next.reconcile('alice');
+    expect(await next.status('alice')).toMatchObject({
+      access: true,
+      plan: 'monthly',
+    });
+    expect(await next.offeredPrice('monthly')).toBe('price_dev_monthly_v2');
+    // A price dropped from the configuration fails synchronization closed.
+    const forgetful = new Billing(f.db, f.dev.stripe, f.time, f.random, {
+      ...f.config,
+      prices: { monthly: 'price_dev_monthly_v2' },
+    });
+    await expect(forgetful.reconcile('alice')).rejects.toThrow('mismatch');
+  },
+);
+
+billingTest(
+  'the browser chooses only a configured plan name, never a price',
+  async ({ f }) => {
+    for (const plan of [
+      'price_dev_monthly',
+      '__proto__',
+      'constructor',
+      'lifetime',
+    ]) {
+      const error = await f.start(plan).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(BillingError);
+      expect(error).toMatchObject({ status: 400, message: 'Unknown plan.' });
+    }
+    const lying = new Billing(f.db, f.dev.stripe, f.time, f.random, {
+      ...f.config,
+      prices: {
+        monthly: { recognized: ['price_dev_monthly'], offer: () => 'price_x' },
+      },
+    });
+    await expect(
+      lying.checkout('alice', 'alice@example.test', 'monthly'),
+    ).rejects.toThrow('does not recognize');
+    expect(f.dev.requests).toEqual([]);
+    const build = (prices: BillingConfig['prices']) =>
+      new Billing(f.db, f.dev.stripe, f.time, f.random, {
+        ...f.config,
+        prices,
+      });
+    expect(() => build({})).toThrow('at least one plan');
+    expect(() => build({ 'a plan': 'price_a' })).toThrow('Plan names');
+    expect(() => build({ monthly: '' })).toThrow('empty Stripe price');
+    expect(() => build({ monthly: 'price_a', yearly: 'price_a' })).toThrow(
+      'exactly one plan',
+    );
+    expect(() =>
+      build({ founding: { recognized: [], offer: () => 'price_a' } }),
+    ).toThrow('needs a Stripe price');
   },
 );

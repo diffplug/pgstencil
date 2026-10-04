@@ -34,7 +34,7 @@ SET default_table_access_method = heap;
 
 CREATE TABLE pgstencil_billing.accounts (
     owner_id text NOT NULL,
-    email text NOT NULL,
+    email text,
     created_at timestamp with time zone NOT NULL,
     trial_used_at timestamp with time zone,
     customer_id text,
@@ -59,7 +59,7 @@ CREATE TABLE pgstencil_billing.checkouts (
     url text,
     created_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
-    CONSTRAINT checkouts_plan_check CHECK ((plan = ANY (ARRAY['monthly'::text, 'yearly'::text]))),
+    CONSTRAINT checkouts_plan_check CHECK ((plan ~ '^[A-Za-z0-9_-]{1,64}$'::text)),
     CONSTRAINT checkouts_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'open'::text, 'complete'::text, 'expired'::text]))),
     CONSTRAINT checkouts_trial_days_check CHECK ((trial_days >= 0))
 );
@@ -91,7 +91,9 @@ CREATE TABLE pgstencil_billing.subscriptions (
     period_end timestamp with time zone NOT NULL,
     trial_end timestamp with time zone,
     cancel_at_period_end boolean NOT NULL,
-    updated_at timestamp with time zone NOT NULL
+    updated_at timestamp with time zone NOT NULL,
+    started_at timestamp with time zone,
+    ended_at timestamp with time zone
 );
 
 
@@ -412,6 +414,13 @@ CREATE UNIQUE INDEX billing_one_checkout ON pgstencil_billing.checkouts USING bt
 --
 
 CREATE INDEX billing_subscription_owner ON pgstencil_billing.subscriptions USING btree (owner_id);
+
+
+--
+-- Name: billing_subscription_price; Type: INDEX; Schema: pgstencil_billing; Owner: -
+--
+
+CREATE INDEX billing_subscription_price ON pgstencil_billing.subscriptions USING btree (price_id);
 
 
 --

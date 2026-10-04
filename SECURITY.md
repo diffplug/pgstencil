@@ -94,7 +94,7 @@ Report privately through GitHub's [advisory form for diffplug/pgstencil](https:/
 
 - The consumer-owned controls listed above.
 - An attacker holding both the database contents and `AUTH_SECRET`. Better Auth stores native session tokens, so that pair mints a session cookie; either alone does not.
-- Better Auth behavior beyond what these tests pin; its private range admits patches only, and an upgrade must rerun the security and snapshot suites.
+- Better Auth behavior beyond what these tests pin; its private dependency is pinned to the exact tested release, and an upgrade must rerun the security and snapshot suites.
 - A provider that asserts an email it did not verify, and account recovery after a lost provider account or mailbox. Facebook sends no verification claim, so pgstencil treats any address Facebook returns as verified.
 - Two applications sharing both a database and `AUTH_SECRET`: they share OAuth state, sessions and limits, and count as one application here.
 - Multi-factor authentication and passkeys, and abuse beyond the budgets above.

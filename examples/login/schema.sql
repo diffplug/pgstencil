@@ -34,7 +34,7 @@ SET default_table_access_method = heap;
 
 CREATE TABLE pgstencil_billing.accounts (
     owner_id text NOT NULL,
-    email text NOT NULL,
+    email text,
     created_at timestamp with time zone NOT NULL,
     trial_used_at timestamp with time zone,
     customer_id text,

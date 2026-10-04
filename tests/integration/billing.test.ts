@@ -131,6 +131,35 @@ billingTest(
 );
 
 billingTest(
+  'an owner without an email checks out with Checkout collecting it',
+  async ({ f }) => {
+    const checkout = await f.billing.checkout('alice', null, 'monthly');
+    const created = f.dev.requests.find(
+      (r) => r.method === 'POST' && r.path === '/v1/customers',
+    )!;
+    // No email is sent, so Stripe's hosted page asks the buyer for one.
+    expect(created.body).toEqual({ 'metadata[pgstencil_owner]': 'alice' });
+    expect(
+      (
+        await f.billing.db
+          .selectFrom('accounts')
+          .select('email')
+          .executeTakeFirstOrThrow()
+      ).email,
+    ).toBeNull();
+    const session = [...f.dev.checkouts.values()].find(
+      (s) => s.url === checkout.url,
+    )!;
+    f.dev.completeCheckout(session.id);
+    await f.deliver();
+    expect((await f.billing.status('alice')).access).toBe(true);
+    await expect(f.billing.account('bob', '')).rejects.toThrow(
+      'an email or null',
+    );
+  },
+);
+
+billingTest(
   'yes-card trial: signup and an open checkout grant nothing; confirmed trial ends exactly on time',
   async ({ f }) => {
     await f.billing.account('alice', 'alice@example.test');

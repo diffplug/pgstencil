@@ -146,10 +146,14 @@ export class Billing<P extends string = string> {
         `${what} creation needs reconciliation before retrying.`,
       );
   }
-  /** Ensures the owner has a billing account row. Safe to call on every view. */
-  async account(ownerId: string, email: string): Promise<void> {
-    if (!ownerId || !email)
-      throw new Error('Billing requires an owner and email');
+  /**
+   * Ensures the owner has a billing account row. Safe to call on every view.
+   * `email` is null for an owner without one: Stripe Checkout then collects
+   * it. The first call's email is the Stripe customer's; later calls keep it.
+   */
+  async account(ownerId: string, email: string | null): Promise<void> {
+    if (!ownerId || email === '')
+      throw new Error('Billing requires an owner, and an email or null');
     await this.db
       .insertInto('accounts')
       .values({
@@ -164,7 +168,10 @@ export class Billing<P extends string = string> {
       .onConflict((c) => c.column('owner_id').doNothing())
       .execute();
   }
-  private async customer(ownerId: string, email: string): Promise<string> {
+  private async customer(
+    ownerId: string,
+    email: string | null,
+  ): Promise<string> {
     await this.account(ownerId, email);
     const account = await this.db.transaction().execute(async (trx) => {
       let row = await trx
@@ -188,7 +195,11 @@ export class Billing<P extends string = string> {
     if (account.customer_id) return account.customer_id;
     this.assertRetryable(account.customer_started_at!, 'Customer');
     const customer = await this.stripe.customers.create(
-      { email: account.email, metadata: { pgstencil_owner: ownerId } },
+      {
+        // Without one, Checkout asks the buyer and sets it on the customer.
+        ...(account.email ? { email: account.email } : {}),
+        metadata: { pgstencil_owner: ownerId },
+      },
       { idempotencyKey: account.customer_key! },
     );
     await this.db
@@ -200,7 +211,8 @@ export class Billing<P extends string = string> {
   }
   async checkout(
     ownerId: string,
-    email: string,
+    /** The owner's email, or null to let Checkout collect it. */
+    email: string | null,
     /** Any configured plan name; untrusted input is fine, since unknown names throw BillingError(400). */
     plan: string,
   ): Promise<{ id: string; url: string }> {

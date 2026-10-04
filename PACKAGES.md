@@ -50,7 +50,7 @@ Auth reserves the existing `public.users`, `login_flows`, `login_challenges`, `s
 
 `Auth` accepts a `renderEmail` function for branding. `createAuthHttp` from `@pgstencil/auth/http` supplies JSON routes under `/api/auth/`, native OAuth callbacks under `/oauth/`, and a non-consuming email-link redirect under `/login/link`. The SPA confirms the link with an authenticated browser-flow POST. Session tokens stay in HttpOnly cookies; the JSON state contains the CSRF token, public session fields, and configured provider names. See the adopter's backend spec for a complete React integration.
 
-The project is MIT licensed and hosted at [diffplug/pgstencil](https://github.com/diffplug/pgstencil). Public npm namespace, registry credentials, trusted publishing and release automation remain deferred. These local archives are ordinary npm package artifacts, so that later switch does not require submodules or a source-loader integration.
+The project is MIT licensed and hosted at [diffplug/pgstencil](https://github.com/diffplug/pgstencil). Releases reach npm through trusted publishing, as described in [Releasing](#releasing). The local archives remain for trying unreleased changes; they are ordinary npm package artifacts, so moving between them and a released version needs no submodules or source-loader integration.
 
 ## Better Auth integration
 

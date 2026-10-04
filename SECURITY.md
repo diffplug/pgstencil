@@ -88,7 +88,7 @@ Pinned by `pnpm test:scripts`, which runs the shipped reporting and redaction sh
 
 ## Reporting a vulnerability
 
-Report privately through GitHub's [advisory form for diffplug/pgstencil](https://github.com/diffplug/pgstencil/security/advisories/new); never a public issue. pgstencil is pre-1.0 and unpublished to npm, so a fix lands on `main` and reaches a consumer through a re-vendored tarball; there is no backport branch.
+Report privately through GitHub's [advisory form for diffplug/pgstencil](https://github.com/diffplug/pgstencil/security/advisories/new); never a public issue. pgstencil is pre-1.0 and releases to npm only from `main`, so a fix lands on `main` and reaches a consumer in the next release ([PACKAGES.md](PACKAGES.md#releasing)); there is no backport branch.
 
 ## What is not defended
 

@@ -11,7 +11,7 @@
     "./diagnostics": "./src/diagnostics.ts"
   },
   "dependencies": {
-    "pg": "^8.23.0",
+    "pg": "^8.23.1",
     "node-pg-migrate": "^9.0.0",
     "testcontainers": "^12.1.0",
     "cheerio": "^1.2.0",

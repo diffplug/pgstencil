@@ -3,8 +3,8 @@ import { readdir, readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
-import { runner } from 'node-pg-migrate';
 import { withClient } from './postgres.ts';
+import { importPeer } from './peer.ts';
 export interface MigrationFile {
   /** Ordering is enforced within each directory; package sources evolve independently. */
   source: string;
@@ -118,6 +118,11 @@ export async function migrate(
   url: string,
   files: MigrationFile[],
 ): Promise<void> {
+  const { runner } = await importPeer(
+    'node-pg-migrate',
+    'pgstencil/database',
+    () => import('node-pg-migrate'),
+  );
   const client = new pg.Client({ connectionString: url });
   await client.connect();
   let temporary: string | undefined;

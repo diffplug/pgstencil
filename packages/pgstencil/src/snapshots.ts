@@ -1,6 +1,9 @@
-import { load } from 'cheerio';
-import TurndownService from 'turndown';
 import type { CapturedEmail } from './email.ts';
+import { importPeer } from './peer.ts';
+const [{ load }, { default: TurndownService }] = await Promise.all([
+  importPeer('cheerio', 'pgstencil/snapshots', () => import('cheerio')),
+  importPeer('turndown', 'pgstencil/snapshots', () => import('turndown')),
+]);
 export function stableJson(value: unknown): string {
   return (
     JSON.stringify(

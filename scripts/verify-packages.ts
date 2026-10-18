@@ -1,5 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { cp, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import {
+  cp,
+  mkdtemp,
+  mkdir,
+  readdir,
+  readFile,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { projectRoot } from '../packages/pgstencil/src/paths.ts';
@@ -15,17 +22,30 @@ const { version: typescriptVersion } = JSON.parse(
     'utf8',
   ),
 ) as { version: string };
+interface Manifest {
+  version: string;
+  peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+}
+const readManifest = async (path: string) =>
+  JSON.parse(await readFile(join(path, 'package.json'), 'utf8')) as Manifest;
 const dependencies: Record<string, string> = {};
 // The consumer owns every shared library, at the version this workspace tests.
 const peers: Record<string, string> = {};
+// Optional peers only the tooling entry points load (PACKAGES.md -> Dependencies),
+// plus the peers they bring.
+const toolingPeers: Record<string, string> = {};
 for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
   const packageDirectory = name === 'pgstencil' ? name : name.split('/')[1]!;
-  const manifest = JSON.parse(
-    await readFile(
-      join(projectRoot, 'packages', packageDirectory, 'package.json'),
-      'utf8',
-    ),
-  ) as { version: string; peerDependencies?: Record<string, string> };
+  const modules = join(
+    projectRoot,
+    'packages',
+    packageDirectory,
+    'node_modules',
+  );
+  const manifest = await readManifest(
+    join(projectRoot, 'packages', packageDirectory),
+  );
   const file = `${name.replace('@', '').replace('/', '-')}-${manifest.version}.tgz`;
   await cp(
     join(projectRoot, 'dist/packages', file),
@@ -34,22 +54,70 @@ for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
   dependencies[name] = `file:./vendor/${file}`;
   for (const peer of Object.keys(manifest.peerDependencies ?? {})) {
     if (peer === 'pgstencil') continue;
-    const installed = JSON.parse(
-      await readFile(
-        join(
-          projectRoot,
-          'packages',
-          packageDirectory,
-          'node_modules',
-          peer,
-          'package.json',
-        ),
-        'utf8',
-      ),
-    ) as { version: string };
-    peers[peer] = installed.version;
+    const installed = await readManifest(join(modules, peer));
+    if (!manifest.peerDependenciesMeta?.[peer]?.optional) {
+      peers[peer] = installed.version;
+      continue;
+    }
+    toolingPeers[peer] = installed.version;
+    // node-pg-migrate peers on pg, which this workspace provides as pgstencil's own.
+    for (const inner of Object.keys(installed.peerDependencies ?? {}))
+      if (!installed.peerDependenciesMeta?.[inner]?.optional)
+        toolingPeers[inner] ??= (
+          await readManifest(join(modules, inner))
+        ).version;
   }
 }
+// An application that imports only runtime entry points, installed the way it
+// deploys: none of the tooling may land, even with peers auto-installed.
+const runtime = await mkdtemp(join(tmpdir(), 'pgstencil-runtime-'));
+await cp(join(directory, 'vendor'), join(runtime, 'vendor'), {
+  recursive: true,
+});
+await writeFile(
+  join(runtime, 'package.json'),
+  JSON.stringify({
+    name: 'runtime-consumer',
+    private: true,
+    type: 'module',
+    packageManager,
+    dependencies: { ...dependencies, ...peers },
+  }),
+);
+await writeFile(
+  join(runtime, 'pnpm-workspace.yaml'),
+  JSON.stringify({
+    overrides: dependencies,
+    strictPeerDependencies: true,
+    peerDependencyRules: { allowAny: ['pgstencil'] },
+  }),
+);
+execFileSync('pnpm', ['install', '--prod', '--ignore-scripts'], {
+  cwd: runtime,
+  stdio: 'inherit',
+});
+// Named independently of the manifests, so a tooling package that moves back to
+// dependencies still counts as a leak.
+const tooling = JSON.parse(
+  await readFile(join(projectRoot, 'scripts/tooling-peers.json'), 'utf8'),
+) as string[];
+const runtimePackages = new Set(
+  (await readdir(join(runtime, 'node_modules/.pnpm')))
+    .filter((entry) => entry.lastIndexOf('@') > 0)
+    .map((entry) => entry.replace(/_.*/, '')),
+);
+const leaked = tooling.filter((peer) =>
+  [...runtimePackages].some((entry) =>
+    entry.startsWith(`${peer.replace('/', '+')}@`),
+  ),
+);
+if (leaked.length)
+  throw new Error(
+    `A production install of the packages includes ${leaked.join(', ')} (${runtime})`,
+  );
+console.log(
+  `Runtime-only consumer: ${runtimePackages.size} packages, none of ${tooling.join(', ')} (${runtime})`,
+);
 await writeFile(
   join(directory, 'package.json'),
   JSON.stringify(
@@ -60,6 +128,7 @@ await writeFile(
       packageManager,
       dependencies: { ...dependencies, ...peers },
       devDependencies: {
+        ...toolingPeers,
         '@types/node': '24.13.3',
         typescript: typescriptVersion,
       },

@@ -1,6 +1,6 @@
 {
   "name": "pgstencil",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -11,17 +11,35 @@
     "./diagnostics": "./src/diagnostics.ts"
   },
   "dependencies": {
-    "pg": "^8.23.1",
+    "pg": "^8.23.1"
+  },
+  "peerDependencies": {
+    "kysely": "^0.29.5",
     "node-pg-migrate": "^9.0.0",
     "testcontainers": "^12.2.1",
     "cheerio": "^1.2.0",
     "turndown": "^7.2.4"
   },
-  "peerDependencies": {
-    "kysely": "^0.29.5"
+  "peerDependenciesMeta": {
+    "node-pg-migrate": {
+      "optional": true
+    },
+    "testcontainers": {
+      "optional": true
+    },
+    "cheerio": {
+      "optional": true
+    },
+    "turndown": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "kysely": "^0.29.5"
+    "kysely": "^0.29.5",
+    "node-pg-migrate": "^9.0.0",
+    "testcontainers": "^12.2.1",
+    "cheerio": "^1.2.0",
+    "turndown": "^7.2.4"
   },
   "engines": {
     "node": ">=24"

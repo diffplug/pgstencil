@@ -1,6 +1,6 @@
 # Consuming pgstencil
 
-Three packages share version 0.3.0: `pgstencil` (infrastructure and test primitives), `@pgstencil/auth` (email/OAuth/session services and a JSON HTTP adapter), and `@pgstencil/stripe` (SaaS billing and StripeDev). They are published to npm as 0.x releases, so a minor release may break compatibility.
+Three packages share version 0.4.0: `pgstencil` (infrastructure and test primitives), `@pgstencil/auth` (email/OAuth/session services and a JSON HTTP adapter), and `@pgstencil/stripe` (SaaS billing and StripeDev). They are published to npm as 0.x releases, so a minor release may break compatibility.
 
 Run `pnpm packages:pack` to produce the three archives in `dist/packages`. They contain ESM JavaScript, TypeScript declarations, the MIT license, and required SQL/Compose assets. Workspace development uses source exports; packing switches the exports to compiled files. Nothing runs migrations during install.
 
@@ -15,6 +15,23 @@ Every archive carries `package/dist/provenance.json`, holding the 40-character `
 Applications declare pgstencil's peer dependencies themselves: `kysely` for every package, `hono` for `@pgstencil/auth`, and `stripe` for `@pgstencil/stripe`. Auth and billing also peer on the `pgstencil` released with them. A library is a peer when the application and pgstencil must share one copy. Either objects cross the boundary, or the library holds module-level state. Kysely and Hono classes have private fields, so two copies are incompatible types. `pgstencil/diagnostics` keeps its request scope in `AsyncLocalStorage`. The application's Renovate updates each shared library once, and pgstencil uses that copy. pnpm reports a release outside a peer range; pgstencil must widen the range first.
 
 Every other dependency is private: pgstencil owns its version and applications do not import it. Better Auth is deliberately private. pgstencil imports its internal subpaths and tests login and linking rules against specific releases, so it is pinned to the exact release CI tested. Even a patch can change internals pgstencil reads (1.7.7 renamed its OAuth state rows), so each Better Auth upgrade reaches applications only through a pgstencil release. A new login provider or Better Auth plugin belongs in `@pgstencil/auth`, not in an application. Private ranges start at the version pgstencil's CI tested. [`.github/renovate.json`](.github/renovate.json) raises that floor, and the next release carries it into each application.
+
+### Tooling peers
+
+pgstencil's test, migration and snapshot tooling loads optional peers, so a production install leaves them out. No entry point imports them statically, and only three load them; `scripts/runtime-deps.test.mjs` and `pnpm packages:verify` fail otherwise. An application using the tooling adds the peers it needs, usually as devDependencies:
+
+| Entry point           | Optional peer         | Loaded when                                                                                                      |
+| --------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `pgstencil/database`  | `testcontainers`      | Local services start or reattach: `ensureServices`, `prepareTemplate`, `allocateDatabase`, `developmentDatabase` |
+| `pgstencil/database`  | `node-pg-migrate`     | `migrate` runs, including inside `allocateDatabase` and `developmentDatabase`                                    |
+| `pgstencil/testing`   | both of the above     | `createTestContext`                                                                                              |
+| `pgstencil/snapshots` | `cheerio`, `turndown` | The module is imported                                                                                           |
+
+```sh
+pnpm add -D testcontainers node-pg-migrate cheerio turndown
+```
+
+Reading migration sources (`defaultMigrations`, `readMigrations`, `validateMigrations`, `appliedMigrations`) needs none of them. A release step that migrates a persistent database needs `node-pg-migrate`, which peers on `pg`, but not `testcontainers`; make it a regular dependency if that step runs from a production install. A missing peer fails with an error naming the package and the entry point that needs it. The peer ranges start at the versions pgstencil's CI tests, and pgstencil widens them as for any peer.
 
 ## Releasing
 
@@ -34,7 +51,7 @@ Version 0.2.0 was published by hand from commit `e79cc4d`, after its audit passe
 
 ## Application composition
 
-Production imports use `pgstencil`, `pgstencil/postgres`, `@pgstencil/auth` and `@pgstencil/stripe`. Docker startup and test fixtures are opt-in imports through `pgstencil/database`, `pgstencil/testing`, and `@pgstencil/stripe/testing`.
+Production imports use `pgstencil`, `pgstencil/postgres`, `pgstencil/diagnostics`, `@pgstencil/auth` and `@pgstencil/stripe`. Docker startup and test fixtures are opt-in imports through `pgstencil/database`, `pgstencil/testing`, and `@pgstencil/stripe/testing`; the first two need the [tooling peers](#tooling-peers).
 
 The database tooling uses the current working directory as the project root, or `PGSTENCIL_PROJECT_ROOT` when explicitly set. State goes in that project's `.pgstencil`; its Docker Compose project name derives from the project path. A project can supply `compose.yaml`, otherwise the package's bundled default is used. The default SQL directory is `migrations`, overridable by a `pgstencil.json` file containing a `migrations` directory path inside the project root; a path resolving outside it is refused. Applications composing packages should pass their complete source list explicitly:
 

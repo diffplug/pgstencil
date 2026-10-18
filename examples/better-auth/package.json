@@ -10,5 +10,9 @@
     "pg": "^8.16.0",
     "pgstencil": "workspace:*",
     "@pgstencil/auth": "workspace:*"
+  },
+  "devDependencies": {
+    "node-pg-migrate": "^9.0.0",
+    "testcontainers": "^12.2.1"
   }
 }

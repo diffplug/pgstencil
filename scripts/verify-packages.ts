@@ -15,17 +15,30 @@ const { version: typescriptVersion } = JSON.parse(
     'utf8',
   ),
 ) as { version: string };
+interface Manifest {
+  version: string;
+  peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+}
+const readManifest = async (path: string) =>
+  JSON.parse(await readFile(join(path, 'package.json'), 'utf8')) as Manifest;
 const dependencies: Record<string, string> = {};
 // The consumer owns every shared library, at the version this workspace tests.
 const peers: Record<string, string> = {};
+// Optional peers only the tooling entry points load (PACKAGES.md -> Dependencies),
+// plus the peers they bring.
+const toolingPeers: Record<string, string> = {};
 for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
   const packageDirectory = name === 'pgstencil' ? name : name.split('/')[1]!;
-  const manifest = JSON.parse(
-    await readFile(
-      join(projectRoot, 'packages', packageDirectory, 'package.json'),
-      'utf8',
-    ),
-  ) as { version: string; peerDependencies?: Record<string, string> };
+  const modules = join(
+    projectRoot,
+    'packages',
+    packageDirectory,
+    'node_modules',
+  );
+  const manifest = await readManifest(
+    join(projectRoot, 'packages', packageDirectory),
+  );
   const file = `${name.replace('@', '').replace('/', '-')}-${manifest.version}.tgz`;
   await cp(
     join(projectRoot, 'dist/packages', file),
@@ -34,20 +47,18 @@ for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
   dependencies[name] = `file:./vendor/${file}`;
   for (const peer of Object.keys(manifest.peerDependencies ?? {})) {
     if (peer === 'pgstencil') continue;
-    const installed = JSON.parse(
-      await readFile(
-        join(
-          projectRoot,
-          'packages',
-          packageDirectory,
-          'node_modules',
-          peer,
-          'package.json',
-        ),
-        'utf8',
-      ),
-    ) as { version: string };
-    peers[peer] = installed.version;
+    const installed = await readManifest(join(modules, peer));
+    if (!manifest.peerDependenciesMeta?.[peer]?.optional) {
+      peers[peer] = installed.version;
+      continue;
+    }
+    toolingPeers[peer] = installed.version;
+    // node-pg-migrate peers on pg, which this workspace provides as pgstencil's own.
+    for (const inner of Object.keys(installed.peerDependencies ?? {}))
+      if (!installed.peerDependenciesMeta?.[inner]?.optional)
+        toolingPeers[inner] ??= (
+          await readManifest(join(modules, inner))
+        ).version;
   }
 }
 await writeFile(
@@ -60,6 +71,7 @@ await writeFile(
       packageManager,
       dependencies: { ...dependencies, ...peers },
       devDependencies: {
+        ...toolingPeers,
         '@types/node': '24.13.3',
         typescript: typescriptVersion,
       },

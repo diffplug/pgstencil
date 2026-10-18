@@ -1,15 +1,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname, basename } from 'node:path';
-import {
-  DockerComposeEnvironment,
-  Wait,
-  type StartedDockerComposeEnvironment,
-} from 'testcontainers';
+import type { StartedDockerComposeEnvironment } from 'testcontainers';
 import pg from 'pg';
 import { queryDatabase, withClient } from './postgres.ts';
 export { connectDatabase, queryDatabase, withClient } from './postgres.ts';
 import { migrate, migrationFingerprint, readMigrations } from './migrations.ts';
 import { withProcessLock } from './lock.ts';
+import { importPeer } from './peer.ts';
 import {
   composeFile,
   projectName,
@@ -59,6 +56,12 @@ export function ensureServices(): Promise<Services> {
   servicesPromise ??= withProcessLock(
     join(stateDirectory, 'services.lock'),
     async () => {
+      // Loaded even when reattaching, so a missing peer fails the same way every run.
+      const { DockerComposeEnvironment, Wait } = await importPeer(
+        'testcontainers',
+        'pgstencil/database',
+        () => import('testcontainers'),
+      );
       const statePath = join(stateDirectory, 'services.json');
       try {
         const state = JSON.parse(await readFile(statePath, 'utf8')) as Services;

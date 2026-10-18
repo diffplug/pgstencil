@@ -1,5 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { cp, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import {
+  cp,
+  mkdtemp,
+  mkdir,
+  readdir,
+  readFile,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { projectRoot } from '../packages/pgstencil/src/paths.ts';
@@ -61,6 +68,56 @@ for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
         ).version;
   }
 }
+// An application that imports only runtime entry points, installed the way it
+// deploys: none of the tooling may land, even with peers auto-installed.
+const runtime = await mkdtemp(join(tmpdir(), 'pgstencil-runtime-'));
+await cp(join(directory, 'vendor'), join(runtime, 'vendor'), {
+  recursive: true,
+});
+await writeFile(
+  join(runtime, 'package.json'),
+  JSON.stringify({
+    name: 'runtime-consumer',
+    private: true,
+    type: 'module',
+    packageManager,
+    dependencies: { ...dependencies, ...peers },
+  }),
+);
+await writeFile(
+  join(runtime, 'pnpm-workspace.yaml'),
+  JSON.stringify({
+    overrides: dependencies,
+    strictPeerDependencies: true,
+    peerDependencyRules: { allowAny: ['pgstencil'] },
+  }),
+);
+execFileSync('pnpm', ['install', '--prod', '--ignore-scripts'], {
+  cwd: runtime,
+  stdio: 'inherit',
+});
+// Named independently of the manifests, so a tooling package that moves back to
+// dependencies still counts as a leak.
+const tooling = JSON.parse(
+  await readFile(join(projectRoot, 'scripts/tooling-peers.json'), 'utf8'),
+) as string[];
+const runtimePackages = new Set(
+  (await readdir(join(runtime, 'node_modules/.pnpm')))
+    .filter((entry) => entry.lastIndexOf('@') > 0)
+    .map((entry) => entry.replace(/_.*/, '')),
+);
+const leaked = tooling.filter((peer) =>
+  [...runtimePackages].some((entry) =>
+    entry.startsWith(`${peer.replace('/', '+')}@`),
+  ),
+);
+if (leaked.length)
+  throw new Error(
+    `A production install of the packages includes ${leaked.join(', ')} (${runtime})`,
+  );
+console.log(
+  `Runtime-only consumer: ${runtimePackages.size} packages, none of ${tooling.join(', ')} (${runtime})`,
+);
 await writeFile(
   join(directory, 'package.json'),
   JSON.stringify(

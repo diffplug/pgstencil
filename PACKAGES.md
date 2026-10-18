@@ -16,6 +16,23 @@ Applications declare pgstencil's peer dependencies themselves: `kysely` for ever
 
 Every other dependency is private: pgstencil owns its version and applications do not import it. Better Auth is deliberately private. pgstencil imports its internal subpaths and tests login and linking rules against specific releases, so it is pinned to the exact release CI tested. Even a patch can change internals pgstencil reads (1.7.7 renamed its OAuth state rows), so each Better Auth upgrade reaches applications only through a pgstencil release. A new login provider or Better Auth plugin belongs in `@pgstencil/auth`, not in an application. Private ranges start at the version pgstencil's CI tested. [`.github/renovate.json`](.github/renovate.json) raises that floor, and the next release carries it into each application.
 
+### Tooling peers
+
+pgstencil's test, migration and snapshot tooling loads optional peers, so a production install leaves them out. No entry point imports them statically, and only three load them; `scripts/runtime-deps.test.mjs` and `pnpm packages:verify` fail otherwise. An application using the tooling adds the peers it needs, usually as devDependencies:
+
+| Entry point           | Optional peer         | Loaded when                                                                                                      |
+| --------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `pgstencil/database`  | `testcontainers`      | Local services start or reattach: `ensureServices`, `prepareTemplate`, `allocateDatabase`, `developmentDatabase` |
+| `pgstencil/database`  | `node-pg-migrate`     | `migrate` runs, including inside `allocateDatabase` and `developmentDatabase`                                    |
+| `pgstencil/testing`   | both of the above     | `createTestContext`                                                                                              |
+| `pgstencil/snapshots` | `cheerio`, `turndown` | The module is imported                                                                                           |
+
+```sh
+pnpm add -D testcontainers node-pg-migrate cheerio turndown
+```
+
+Reading migration sources (`defaultMigrations`, `readMigrations`, `validateMigrations`, `appliedMigrations`) needs none of them. A release step that migrates a persistent database needs `node-pg-migrate`, which peers on `pg`, but not `testcontainers`; make it a regular dependency if that step runs from a production install. A missing peer fails with an error naming the package and the entry point that needs it. The peer ranges start at the versions pgstencil's CI tests, and pgstencil widens them as for any peer.
+
 ## Releasing
 
 The three packages share one version. A release is a pull request that raises `version` in all three `package.json` files: a patch for a fix or compatible addition, a minor for a breaking change, since these are 0.x. Nothing else triggers one.
@@ -34,7 +51,7 @@ Version 0.2.0 was published by hand from commit `e79cc4d`, after its audit passe
 
 ## Application composition
 
-Production imports use `pgstencil`, `pgstencil/postgres`, `@pgstencil/auth` and `@pgstencil/stripe`. Docker startup and test fixtures are opt-in imports through `pgstencil/database`, `pgstencil/testing`, and `@pgstencil/stripe/testing`.
+Production imports use `pgstencil`, `pgstencil/postgres`, `pgstencil/diagnostics`, `@pgstencil/auth` and `@pgstencil/stripe`. Docker startup and test fixtures are opt-in imports through `pgstencil/database`, `pgstencil/testing`, and `@pgstencil/stripe/testing`; the first two need the [tooling peers](#tooling-peers).
 
 The database tooling uses the current working directory as the project root, or `PGSTENCIL_PROJECT_ROOT` when explicitly set. State goes in that project's `.pgstencil`; its Docker Compose project name derives from the project path. A project can supply `compose.yaml`, otherwise the package's bundled default is used. The default SQL directory is `migrations`, overridable by a `pgstencil.json` file containing a `migrations` directory path inside the project root; a path resolving outside it is refused. Applications composing packages should pass their complete source list explicitly:
 

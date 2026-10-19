@@ -42,6 +42,12 @@ The remaining bullets are read rather than run:
   Check the triggers, the job names, `persist-credentials: false`, the
   permission blocks, the reporting step's verdict grammar, and that the
   redaction step is present and covers every file the archive step publishes.
+- The environment deployment-branch policy and the active rules for `main`
+  require live GitHub API reads, not just workflow inspection. Run both `gh api`
+  commands in `SECURITY.md` with `--paginate`; CI supplies `GH_TOKEN` and the
+  existing `actions: read` permission, while local runs use your `gh` login.
+  If either request fails, record it as `UNVERIFIABLE` with the API error;
+  never infer the live settings from the workflow's comments.
 - The `Packed provenance` bullets are read over `scripts/build-packages.ts`,
   `scripts/pack-packages.ts` and `scripts/verify-packages.ts`, with
   `pnpm packages:verify` as the evidence.

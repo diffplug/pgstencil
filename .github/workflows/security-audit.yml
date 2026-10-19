@@ -22,7 +22,7 @@ on:
 
 permissions:
   contents: read # checkout
-  actions: read # deep-link this run's transcript artifact from the issue
+  actions: read # inspect deployment branch policies and link the transcript artifact
   issues: write # file, append to and close the failure issue
 
 jobs:
@@ -94,6 +94,10 @@ jobs:
       # `.github/audit/` so CI and the local runner cannot disagree.
       - name: Audit against SECURITY.md
         env:
+          # SECURITY.md checks live deployment branch policies (actions: read)
+          # and branch rules (implicit metadata: read). Without this, gh cannot
+          # authenticate and shared-runner API limits leave them UNVERIFIABLE.
+          GH_TOKEN: ${{ github.token }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_VERSION: 2.1.278
           # Process-wide cap on a single Bash call. The default is two minutes —
@@ -144,6 +148,7 @@ jobs:
       - name: Redact secrets from agent output
         if: always()
         env:
+          GH_TOKEN: ${{ github.token }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           TRANSCRIPT="$RUNNER_TEMP/claude-execution-output.json"
@@ -153,7 +158,7 @@ jobs:
             for (const p of process.argv.slice(1)) {
               if (!fs.existsSync(p)) continue;
               let s = fs.readFileSync(p, "utf8");
-              for (const name of ["CLAUDE_CODE_OAUTH_TOKEN"]) {
+              for (const name of ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]) {
                 const v = process.env[name];
                 if (!v || v.length < 8) continue;
                 const parts = s.split(v);
@@ -163,7 +168,7 @@ jobs:
               fs.writeFileSync(p, s);
             }
             if (hits > 0) {
-              console.log("::warning::Redacted " + hits + " literal secret occurrence(s) from agent output. A secret reached a file in cleartext — rotate CLAUDE_CODE_OAUTH_TOKEN.");
+              console.log("::warning::Redacted " + hits + " literal secret occurrence(s) from agent output. A secret reached a file in cleartext — rotate CLAUDE_CODE_OAUTH_TOKEN if exposed; GH_TOKEN expires with this job.");
             } else {
               console.log("No literal secret occurrences found.");
             }

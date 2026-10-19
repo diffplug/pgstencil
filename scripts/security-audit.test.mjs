@@ -112,6 +112,7 @@ function fixture(t) {
     GITHUB_REPOSITORY: 'fixture/repo',
     GITHUB_RUN_ID: '123',
     CLAUDE_CODE_OAUTH_TOKEN: 'fixture-oauth-token',
+    GH_TOKEN: 'fixture-github-token',
   };
   return { dir, env };
 }
@@ -337,7 +338,7 @@ test('redaction covers every published sink', (t) => {
   for (const sink of publishedSinks)
     writeFileSync(
       join(dir, sink),
-      `before ${env.CLAUDE_CODE_OAUTH_TOKEN} after`,
+      `before ${env.CLAUDE_CODE_OAUTH_TOKEN} between ${env.GH_TOKEN} after`,
     );
   const result = spawnSync(
     'bash',
@@ -354,10 +355,13 @@ test('redaction covers every published sink', (t) => {
     `expected every sink, got ${publishedSinks.join(', ')}`,
   );
   for (const sink of publishedSinks)
-    assert.equal(readFileSync(join(dir, sink), 'utf8'), 'before *** after');
+    assert.equal(
+      readFileSync(join(dir, sink), 'utf8'),
+      'before *** between *** after',
+    );
   assert.match(
     result.stdout,
-    /::warning::Redacted 2 literal secret occurrence/,
+    /::warning::Redacted 4 literal secret occurrence/,
   );
 });
 
@@ -476,4 +480,25 @@ test('the workflow keeps the triggers and the job name a consumer reads', () => 
     !/^concurrency:/m.test(workflow),
     'the audit must not cancel a superseded run',
   );
+});
+
+test('the auditor can authenticate the live GitHub policy checks and redact its token', () => {
+  const lines = workflow.split('\n');
+  for (const stepName of [
+    'Audit against SECURITY.md',
+    'Redact secrets from agent output',
+  ]) {
+    const { at } = findStep(lines, stepName);
+    const runAt = lines.findIndex(
+      (line, i) => i > at && line.trim() === 'run: |',
+    );
+    assert.match(
+      lines.slice(at, runAt).join('\n'),
+      /^ {10}GH_TOKEN: \$\{\{ github.token \}\}$/m,
+      `${stepName} needs the workflow token`,
+    );
+  }
+  // Listing deployment branch policies needs Actions read; the branch rules
+  // endpoint needs only the token's implicit Metadata read permission.
+  assert.match(workflow.split('\njobs:')[0], /^ {2}actions: read\b/m);
 });

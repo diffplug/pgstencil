@@ -6,6 +6,7 @@ import {
 import { Hono } from 'hono';
 import type { EmailSender } from 'pgstencil';
 import { createAuthApp, type AuthAppOptions } from './better-auth.ts';
+import { authSecurityHeaders } from './better-auth-security.ts';
 import {
   oauthFromEnvironment,
   providers,
@@ -41,6 +42,8 @@ export function createBetterAuthWorker<E extends BetterAuthWorkerBindings>(
   },
 ) {
   const app = new Hono<{ Bindings: E }>();
+  // Setup, teardown and diagnostics can return errors outside the inner app.
+  app.use('*', authSecurityHeaders);
   app.all('*', async (c) => {
     const handle = async () => {
       if (new URL(c.env.APP_ORIGIN).protocol !== 'https:')

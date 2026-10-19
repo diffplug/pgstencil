@@ -180,6 +180,34 @@ async function login(f: Fixture, address = 'worker@example.test') {
   };
 }
 
+test('Workers auth setup failures return a safe 503 with security headers', async ({
+  onTestFinished,
+}) => {
+  const bundle = await bundles[0]!;
+  const worker = new Miniflare(
+    convertV4MiniflareOptions({
+      modules: true,
+      script: bundle.outputFiles[0]!.text,
+      compatibilityDate: '2026-09-08',
+      compatibilityFlags: ['nodejs_compat'],
+      bindings: { APP_ORIGIN: 'http://misconfigured.example.test' },
+    }),
+  );
+  onTestFinished(() => worker.dispose());
+  const response = await worker.dispatchFetch(origin + '/api/auth/get-session');
+  expect(response.status).toBe(503);
+  expect(response.headers.get('cache-control')).toBe('no-store');
+  expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+  expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+  expect(response.headers.get('x-frame-options')).toBe('DENY');
+  expect(response.headers.get('content-security-policy')).toBe(
+    "default-src 'none'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  );
+  expect(await response.json()).toEqual({
+    message: 'Sign-in is temporarily unavailable. Please try again.',
+  });
+});
+
 test('Better Auth in workerd: deterministic replay, separate clocks, shared database rate limits', async ({
   onTestFinished,
 }) => {

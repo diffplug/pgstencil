@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { sql } from 'kysely';
-import type { Hono } from 'hono';
+import type { Hono, MiddlewareHandler } from 'hono';
 import { isIdentityEmail } from './better-auth-email.ts';
 import { bodyLimit } from 'hono/body-limit';
 import type { connectDatabase } from 'pgstencil/postgres';
@@ -131,6 +131,20 @@ async function consume(
   return result.rows.length === 1;
 }
 
+/** Apply the same policy to auth responses and the Workers adapter's fallbacks. */
+export const authSecurityHeaders: MiddlewareHandler = async (c, next) => {
+  await next();
+  // Apply to the final response, including upstream immutable redirects.
+  c.header('Cache-Control', 'no-store');
+  c.header('Referrer-Policy', 'no-referrer');
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
+  c.header(
+    'Content-Security-Policy',
+    "default-src 'none'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  );
+};
+
 export function protectAuth(
   app: Hono,
   options: {
@@ -170,18 +184,7 @@ export function protectAuth(
     c.req.raw = new Request(c.req.raw, { headers });
     await next();
   });
-  app.use('*', async (c, next) => {
-    await next();
-    // Apply to the final response, including upstream immutable redirects.
-    c.header('Cache-Control', 'no-store');
-    c.header('Referrer-Policy', 'no-referrer');
-    c.header('X-Content-Type-Options', 'nosniff');
-    c.header('X-Frame-Options', 'DENY');
-    c.header(
-      'Content-Security-Policy',
-      "default-src 'none'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-    );
-  });
+  app.use('*', authSecurityHeaders);
   app.use('/api/auth/*', bodyLimit({ maxSize: 16 * 1024 }));
   app.get('/api/auth/csrf', (c) => {
     let value = cookies(c.req.raw).get(cookieName);

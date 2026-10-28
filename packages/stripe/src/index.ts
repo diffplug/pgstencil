@@ -33,6 +33,17 @@ export interface BillingConfig<P extends string = string> {
   /** Origins this billing setup redirects the browser to; defaults to Stripe's. */
   redirectOrigins?: readonly string[];
 }
+/** A completed subscription Checkout, read from its verified completion event. */
+export interface CompletedCheckout {
+  /** The operation ID `checkout` returned. */
+  operation: string;
+  ownerId: string;
+  /** The plan name the Checkout was opened for. */
+  plan: string;
+  priceId: string;
+  /** The `ref` passed to `checkout`, or null. */
+  ref: string | null;
+}
 export class BillingError extends Error {
   constructor(
     message: string,
@@ -45,6 +56,8 @@ const OPEN = ['pending', 'open'];
 /** Subscriptions that never held a purchase, or that Stripe no longer lists. */
 const UNPURCHASED = ['incomplete', 'incomplete_expired', 'missing'];
 const PLAN_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+/** Migration 006 checks the same pattern on `checkouts.ref`. */
+const CHECKOUT_REF = /^[a-z0-9:-]{1,40}$/;
 const SUBSCRIBED = [
   'trialing',
   'active',
@@ -230,7 +243,18 @@ export class Billing<P extends string = string> {
     email: string | null,
     /** Any configured plan name; untrusted input is fine, since unknown names throw BillingError(400). */
     plan: string,
+    options: {
+      /**
+       * An attribution label, such as the link that led here: 1-40 of
+       * `a-z`, `0-9`, `:` and `-`, else BillingError(400). An open
+       * Checkout keeps the ref it was opened with.
+       */
+      ref?: string | undefined;
+    } = {},
   ): Promise<{ id: string; url: string }> {
+    const ref = options.ref ?? null;
+    if (ref !== null && (typeof ref !== 'string' || !CHECKOUT_REF.test(ref)))
+      throw new BillingError('Invalid checkout ref.', 400);
     // Resolved before any Stripe write: an unknown plan or a bad offer creates nothing.
     const price = await this.offeredPrice(plan);
     const customer = await this.customer(ownerId, email);
@@ -278,6 +302,7 @@ export class Billing<P extends string = string> {
           url: null,
           created_at: this.time.now(),
           expires_at: new Date(this.time.now().getTime() + 60 * 60000),
+          ref,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -288,6 +313,8 @@ export class Billing<P extends string = string> {
       this.assertRetryable(operation.created_at, 'Checkout');
       const success = new URL(this.returnUrl);
       success.searchParams.set('checkout', operation.id);
+      // Only a stored ref is sent, so a retry repeats it and no ref adds no key.
+      const ref = operation.ref ? { pgstencil_ref: operation.ref } : {};
       const session = await this.stripe.checkout.sessions.create(
         {
           mode: 'subscription',
@@ -311,6 +338,7 @@ export class Billing<P extends string = string> {
             metadata: {
               pgstencil_owner: ownerId,
               pgstencil_operation: operation.id,
+              ...ref,
             },
             ...(operation.trial_days
               ? {
@@ -321,7 +349,7 @@ export class Billing<P extends string = string> {
                 }
               : {}),
           },
-          metadata: { pgstencil_operation: operation.id },
+          metadata: { pgstencil_operation: operation.id, ...ref },
           success_url: success.href,
           cancel_url: this.returnUrl,
           expires_at: Math.floor(operation.expires_at.getTime() / 1000),
@@ -415,6 +443,35 @@ export class Billing<P extends string = string> {
         .where('id', '=', operation.id)
         .execute();
     }
+  }
+  /**
+   * What a verified `checkout.session.completed` event completed, including
+   * its `ref`; null for any other event, or a Checkout pgstencil did not open.
+   * Inside `webhook`'s `apply`, pass its transaction: the callback runs once per
+   * event, so counting there never counts a redelivery.
+   */
+  async completedCheckout(
+    event: Stripe.Event,
+    trx: Transaction<BillingDB> | Kysely<BillingDB> = this.db,
+  ): Promise<CompletedCheckout | null> {
+    if (event.type !== 'checkout.session.completed') return null;
+    const session = event.data.object;
+    const operationId = session.metadata?.pgstencil_operation;
+    if (session.mode !== 'subscription' || !operationId) return null;
+    const row = await trx
+      .selectFrom('checkouts')
+      .selectAll()
+      .where('id', '=', operationId)
+      .where('session_id', '=', session.id)
+      .executeTakeFirst();
+    if (!row || session.client_reference_id !== row.owner_id) return null;
+    return {
+      operation: row.id,
+      ownerId: row.owner_id,
+      plan: row.plan,
+      priceId: row.price_id,
+      ref: row.ref,
+    };
   }
   async portal(ownerId: string): Promise<string> {
     const account = await this.db

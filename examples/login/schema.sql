@@ -59,7 +59,9 @@ CREATE TABLE pgstencil_billing.checkouts (
     url text,
     created_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
+    ref text,
     CONSTRAINT checkouts_plan_check CHECK ((plan ~ '^[A-Za-z0-9_-]{1,64}$'::text)),
+    CONSTRAINT checkouts_ref_check CHECK ((ref ~ '^[a-z0-9:-]{1,40}$'::text)),
     CONSTRAINT checkouts_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'open'::text, 'complete'::text, 'expired'::text]))),
     CONSTRAINT checkouts_trial_days_check CHECK ((trial_days >= 0))
 );

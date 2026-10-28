@@ -661,3 +661,69 @@ test('automatic tax: Checkout calculates tax and saves the address it collects; 
         }),
     ).toThrow(config.managedPayments ? 'Managed Payments' : 'automaticTax');
 });
+
+billingTest(
+  'a checkout ref is validated, kept across retries, and read back from the completion event',
+  async ({ f }) => {
+    for (const ref of ['Settings', '', 'a'.repeat(41), 'a b', 'a_b', 'é'])
+      await expect(
+        f.billing.checkout('alice', 'alice@example.test', 'monthly', { ref }),
+      ).rejects.toMatchObject({ status: 400 });
+    expect(f.dev.requests).toEqual([]);
+    // The first response is lost; the retry sends the stored ref, not its own.
+    f.dev.failNext('/v1/checkout/sessions', true);
+    await expect(
+      f.billing.checkout('alice', 'alice@example.test', 'monthly', {
+        ref: 'settings-voice',
+      }),
+    ).rejects.toThrow();
+    const checkout = await f.billing.checkout(
+      'alice',
+      'alice@example.test',
+      'monthly',
+      { ref: 'upsell:push' },
+    );
+    const creations = f.dev.requests.filter(
+      (r) => r.path === '/v1/checkout/sessions',
+    );
+    expect(creations).toHaveLength(2);
+    expect(creations[1]!.body).toEqual(creations[0]!.body);
+    expect(creations[0]!.body).toMatchObject({
+      'metadata[pgstencil_operation]': checkout.id,
+      'metadata[pgstencil_ref]': 'settings-voice',
+      'subscription_data[metadata][pgstencil_ref]': 'settings-voice',
+    });
+    const session = [...f.dev.checkouts.values()].find(
+      (s) => s.url === checkout.url,
+    )!;
+    f.dev.completeCheckout(session.id);
+    const completed: unknown[] = [];
+    while (f.dev.events.length) {
+      const { body, signature } = f.dev.signed(f.dev.events.shift()!);
+      await f.billing.webhook(body, signature, async (event, trx) => {
+        completed.push(await f.billing.completedCheckout(event, trx));
+      });
+    }
+    expect(completed).toEqual([
+      {
+        operation: checkout.id,
+        ownerId: 'alice',
+        plan: 'monthly',
+        priceId: f.dev.prices.monthly,
+        ref: 'settings-voice',
+      },
+      null,
+    ]);
+    // Without a ref, Checkout carries no ref key and completion reports null.
+    const bob = await f.start('monthly', 'bob');
+    const body = f.dev.requests.at(-1)!.body;
+    expect(
+      Object.keys(body).filter((key) => key.includes('pgstencil_ref')),
+    ).toEqual([]);
+    f.dev.completeCheckout(bob.session.id);
+    const event = f.dev.events.find(
+      (e) => e.type === 'checkout.session.completed',
+    )!;
+    expect((await f.billing.completedCheckout(event))?.ref).toBeNull();
+  },
+);

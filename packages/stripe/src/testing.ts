@@ -123,12 +123,13 @@ export async function createStripeDev(
       canceled_at: null,
       trial_end: days ? seconds() + days * 86400 : null,
       cancel_at_period_end: false,
-      metadata: {
-        pgstencil_owner: p.get('subscription_data[metadata][pgstencil_owner]'),
-        pgstencil_operation: p.get(
-          'subscription_data[metadata][pgstencil_operation]',
-        ),
-      },
+      metadata: Object.fromEntries(
+        [...p]
+          .filter(([key]) =>
+            /^subscription_data\[metadata\]\[[^\]]+\]$/.test(key),
+          )
+          .map(([key, value]) => [key.slice(28, -1), value]),
+      ),
       items: {
         object: 'list',
         has_more: false,

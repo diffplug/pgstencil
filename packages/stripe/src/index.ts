@@ -76,6 +76,64 @@ const STRIPE_REDIRECT_ORIGINS = [
   'https://billing.stripe.com',
 ];
 
+function checkRefundDays(refundDays: number): void {
+  if (!Number.isInteger(refundDays) || refundDays < 0 || refundDays > 730)
+    throw new Error('refundDays must be an integer between 0 and 730');
+}
+/** What the purchase rule reads: a synchronized row, as `status(owner).subscription`. */
+export interface PurchaseFacts {
+  status: string;
+  started_at: Date | null;
+  ended_at: Date | null;
+  trial_end: Date | null;
+}
+/**
+ * Whether a subscription is a completed purchase, and if not, why:
+ * `unpurchased` (Stripe never completed its first payment, or no longer
+ * lists it), `ended-in-trial` (never charged), or `refund-window` (ended
+ * within `refundDays` of starting, which is how an application's refund
+ * looks: pgstencil cannot tell it from an immediate cancellation).
+ */
+export type PurchaseStanding =
+  'purchased' | 'unpurchased' | 'ended-in-trial' | 'refund-window';
+/**
+ * The rule `purchaseCounts` applies, for one subscription: pure, with no
+ * I/O. Accepts a synchronized row or a Stripe subscription, such as a
+ * webhook event's object. A day is 24 hours.
+ */
+export function purchaseStanding(
+  subscription: PurchaseFacts | Stripe.Subscription,
+  options: { refundDays: number },
+): PurchaseStanding {
+  checkRefundDays(options.refundDays);
+  const facts: PurchaseFacts =
+    'start_date' in subscription
+      ? {
+          status: subscription.status,
+          started_at: instant(subscription.start_date),
+          ended_at:
+            subscription.ended_at === null
+              ? null
+              : instant(subscription.ended_at),
+          trial_end:
+            subscription.trial_end === null
+              ? null
+              : instant(subscription.trial_end),
+        }
+      : subscription;
+  if (UNPURCHASED.includes(facts.status)) return 'unpurchased';
+  const ended = facts.ended_at?.getTime();
+  if (ended === undefined) return 'purchased';
+  if (facts.trial_end && ended <= facts.trial_end.getTime())
+    return 'ended-in-trial';
+  if (
+    facts.started_at &&
+    ended < facts.started_at.getTime() + options.refundDays * 86_400_000
+  )
+    return 'refund-window';
+  return 'purchased';
+}
+
 /** Owns billing state; HTTP adapters supply an already-authorized owner ID. */
 export class Billing<P extends string = string> {
   readonly db: Kysely<BillingDB>;
@@ -155,8 +213,11 @@ export class Billing<P extends string = string> {
         'Managed Payments calculates tax itself; do not also enable automaticTax',
       );
   }
-  /** A price removed from the configuration no longer maps to a plan, so report it as unknown. */
-  private planOf(priceId: string | null | undefined): P | null {
+  /**
+   * The configured plan a Price grants, without I/O. A Price removed from the
+   * configuration no longer maps to a plan, so it reports null, as does null.
+   */
+  planOf(priceId: string | null | undefined): P | null {
     return (priceId && this.plans.get(priceId)) || null;
   }
   /** The Price a checkout started now would offer for `plan`. Unknown plans throw BillingError(400). */
@@ -632,19 +693,16 @@ export class Billing<P extends string = string> {
   }
   /**
    * Completed purchases per Price, from synchronized rows without network
-   * requests. A subscription counts unless Stripe never completed its first
-   * payment (`incomplete`, `incomplete_expired`), no longer lists it
-   * (`missing`), or it ended no later than its trial or within `refundDays`
-   * of starting. Stripe does not tell pgstencil about refunds: an application
-   * that refunds also cancels immediately, inside that window.
+   * requests: the subscriptions whose `purchaseStanding` is `purchased`.
+   * Stripe does not tell pgstencil about refunds: an application that
+   * refunds also cancels immediately, inside the refund window.
    */
   async purchaseCounts(
     prices: readonly string[],
     options: { refundDays: number },
   ): Promise<Record<string, number>> {
     const { refundDays } = options;
-    if (!Number.isInteger(refundDays) || refundDays < 0 || refundDays > 730)
-      throw new Error('refundDays must be an integer between 0 and 730');
+    checkRefundDays(refundDays);
     const counts: Record<string, number> = Object.fromEntries(
       prices.map((price) => [price, 0]),
     );
@@ -667,7 +725,8 @@ export class Billing<P extends string = string> {
               eb(
                 'ended_at',
                 '>=',
-                sql<Date>`started_at + make_interval(days => ${refundDays})`,
+                // Hours, not days: a day is 24 hours in every session time zone, as in purchaseStanding.
+                sql<Date>`started_at + make_interval(hours => ${refundDays * 24})`,
               ),
             ]),
           ]),

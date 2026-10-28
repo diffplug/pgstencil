@@ -59,7 +59,9 @@ Each Price belongs to exactly one plan. A subscription on any recognized Price g
 
 - its status is `incomplete` or `incomplete_expired` (Stripe never completed the first payment) or `missing` (Stripe no longer lists it);
 - it ended no later than its trial end, so it was never charged; or
-- it ended within `refundDays` of starting.
+- it ended within `refundDays` of starting, a day being 24 hours.
+
+`purchaseStanding(subscription, { refundDays })`, a pure function exported beside `Billing`, applies the same rule to one subscription, so an application never re-derives it: it returns `purchased`, or why not — `unpurchased`, `ended-in-trial` or `refund-window`, checked in that order. It takes a synchronized row (`status(owner).subscription`) or a Stripe subscription, such as a `customer.subscription.deleted` event's object; `refund-window` there is how a refund looks. `billing.planOf(priceId)` returns the configured plan a Price grants, or null for a Price the configuration no longer recognizes, without I/O.
 
 pgstencil reads subscriptions, not invoices, charges or refunds. A refund alone changes nothing it sees: an application that refunds must also cancel the subscription immediately, inside the window, for the seat to return. Inside the window it cannot tell a refund from an immediate cancellation without one, and either returns the seat; past it, a refund keeps the seat counted. A disputed charge counts until the subscription ends. Counts include only subscriptions pgstencil created and has synchronized; rows synchronized by a release before `started_at` existed count while they lack it, and gain it on the next sync.
 

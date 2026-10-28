@@ -15,6 +15,7 @@ Construct `Billing` with a Kysely connection, a Stripe SDK instance, your `Time`
   prices: { monthly: 'price_...', yearly: 'price_...' },
   trialDays: 14,
   // managedPayments: true,
+  // automaticTax: true,
   webhookSecret: process.env.STRIPE_WEBHOOK_SECRET!,
   live: true,
   origin: 'https://your-app.example',
@@ -26,6 +27,8 @@ Construct `Billing` with a Kysely connection, a Stripe SDK instance, your `Time`
 The HTTP adapter supplies the authorized billing-owner ID. An owner can be a user or an organization. Never accept a customer ID, price ID, return URL, quantity or owner ID directly from a browser without authorization. The example demonstrates session authentication, CSRF-protected forms, fixed server-side return paths, and raw signed webhook handling. `startProduction` accepts its `billing` configuration; create the SDK with your secret API key there, and inject your production email sender separately.
 
 `checkout(owner, email, plan)` takes a configured plan name and returns an operation ID and hosted URL; `email` may be null for an owner without one, and Stripe Checkout then collects it onto the customer (the first email recorded for an owner is the customer's); any other name throws `BillingError` with status 400, so an adapter may pass the submitted plan name through. `confirmCheckout(owner, operation)` checks ownership and retrieves authoritative Stripe state; a success URL alone never grants access. `portal(owner)` opens Stripe's hosted portal. `cancelCheckout(owner)` expires an unfinished Checkout before a different plan is selected. `reconcile(owner)` repairs missed webhook state. Use it periodically for existing billing accounts as well as when displaying billing. `status(owner)` reads the synchronized entitlement without making network requests; its `plan` is the configured name whose Prices include the subscription's Price.
+
+`checkout(owner, email, plan, { ref })` takes an optional attribution label, such as the link that led to the purchase: 1–40 lowercase letters, digits, `:` or `-`, else `BillingError` 400 before any write. It is stored on the operation (migration 006) and sent as `pgstencil_ref` in the Checkout Session's and subscription's metadata; pgstencil writes that key itself, so a ref cannot replace `pgstencil_owner` or `pgstencil_operation`. An open Checkout keeps the ref it was opened with, and its retries resend it, so a later click's ref never changes its idempotent parameters; a checkout without a ref sends exactly the parameters it did before. `completedCheckout(event, trx)` reads a verified `checkout.session.completed` event back as `{ operation, ownerId, plan, priceId, ref }` from the stored operation, and returns null for any other event or a Checkout pgstencil did not open. Call it inside `webhook`'s `apply` with its transaction to count a completion exactly once, never on redelivery.
 
 Access requires exactly one `trialing` or `active` subscription on a recognized Price and an unexpired trial or current billing period. Other statuses deny access. There is no implicit payment-failure grace period. Cancellation scheduled for period end retains access until that deadline. Trial eligibility is consumed once a subscription is observed and never resets when it is canceled. This is per billing owner, not a guarantee against a person creating multiple accounts.
 
@@ -56,13 +59,19 @@ Each Price belongs to exactly one plan. A subscription on any recognized Price g
 
 - its status is `incomplete` or `incomplete_expired` (Stripe never completed the first payment) or `missing` (Stripe no longer lists it);
 - it ended no later than its trial end, so it was never charged; or
-- it ended within `refundDays` of starting.
+- it ended within `refundDays` of starting, a day being 24 hours.
+
+`purchaseStanding(subscription, { refundDays })`, a pure function exported beside `Billing`, applies the same rule to one subscription, so an application never re-derives it: it returns `purchased`, or why not — `unpurchased`, `ended-in-trial` or `refund-window`, checked in that order. It takes a synchronized row (`status(owner).subscription`) or a Stripe subscription, such as a `customer.subscription.deleted` event's object; `refund-window` there is how a refund looks. `billing.planOf(priceId)` returns the configured plan a Price grants, or null for a Price the configuration no longer recognizes, without I/O.
 
 pgstencil reads subscriptions, not invoices, charges or refunds. A refund alone changes nothing it sees: an application that refunds must also cancel the subscription immediately, inside the window, for the seat to return. Inside the window it cannot tell a refund from an immediate cancellation without one, and either returns the seat; past it, a refund keeps the seat counted. A disputed charge counts until the subscription ends. Counts include only subscriptions pgstencil created and has synchronized; rows synchronized by a release before `started_at` existed count while they lack it, and gain it on the next sync.
 
 ### Managed Payments
 
 `managedPayments: true` sets `managed_payments: { enabled: true }` on every Checkout Session, making Stripe the merchant of record; the installed Stripe SDK types that parameter at `STRIPE_API_VERSION`. Checkout still sends `payment_method_collection: 'always'` and `payment_method_types: ['card']`, and the trial parameters when a trial applies. StripeDev records the parameter but does not model Managed Payments, so confirm in a Stripe sandbox that your account accepts that combination before going live. Changing the flag while a Checkout creation is still retryable changes its idempotent parameters, so Stripe rejects that retry.
+
+### Stripe Tax
+
+`automaticTax: true` sets `automatic_tax: { enabled: true }` on every Checkout Session, so Stripe Tax calculates tax on the first payment and on the subscription's renewals. pgstencil creates each customer without an address, which Stripe refuses for automatic tax, so the session also sends `customer_update: { address: 'auto' }`: Checkout collects the address tax needs (`billing_address_collection` stays Stripe's default `auto`) and saves it on the customer for renewals. Card collection and trial parameters are unchanged. The constructor refuses `automaticTax` together with `managedPayments`, because Stripe rejects `automatic_tax` on a Managed Payments session, which calculates tax itself. Tax registrations, product tax codes and Price tax behavior are Stripe account settings. StripeDev records the parameters and, like Stripe, rejects automatic tax for a customer without an address unless the session saves one, but it calculates no tax; confirm real amounts in a Stripe sandbox before going live. Changing the flag while a Checkout creation is still retryable changes its idempotent parameters, so Stripe rejects that retry.
 
 ## Production Stripe setup
 

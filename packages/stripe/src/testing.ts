@@ -123,12 +123,13 @@ export async function createStripeDev(
       canceled_at: null,
       trial_end: days ? seconds() + days * 86400 : null,
       cancel_at_period_end: false,
-      metadata: {
-        pgstencil_owner: p.get('subscription_data[metadata][pgstencil_owner]'),
-        pgstencil_operation: p.get(
-          'subscription_data[metadata][pgstencil_operation]',
-        ),
-      },
+      metadata: Object.fromEntries(
+        [...p]
+          .filter(([key]) =>
+            /^subscription_data\[metadata\]\[[^\]]+\]$/.test(key),
+          )
+          .map(([key, value]) => [key.slice(28, -1), value]),
+      ),
       items: {
         object: 'list',
         has_more: false,
@@ -324,6 +325,25 @@ export async function createStripeDev(
           !intervals.has(body.get('line_items[0][price]') ?? '')
         )
           throw new Error('No such price');
+        // Recorded, not modeled: StripeDev calculates no tax. Like Stripe, it
+        // refuses automatic tax for a customer with nowhere to save an address.
+        const automaticTax = body.get('automatic_tax[enabled]') === 'true';
+        session.automatic_tax = {
+          enabled: automaticTax,
+          liability: null,
+          provider: null,
+          status: null,
+        };
+        if (
+          automaticTax &&
+          session.customer &&
+          !customers.get(session.customer as string)?.address &&
+          body.get('customer_update[address]') !== 'auto' &&
+          body.get('customer_update[shipping]') !== 'auto'
+        )
+          throw new Error(
+            'Automatic tax calculation in Checkout requires a valid address on the Customer',
+          );
         checkouts.set(sessionId, session);
         parameters.set(sessionId, body);
         result = session;

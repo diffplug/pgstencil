@@ -51,6 +51,8 @@ async function fixture(
     | 'allowMissingEmail'
     | 'rememberLoginMethod'
     | 'diagnostics'
+    | 'hooks'
+    | 'waitUntil'
   > = {},
 ) {
   const context = await createTestContext({
@@ -910,6 +912,110 @@ test('Last login method remembers only successful sign-ins and survives logout',
   const other = await f.browser();
   other.jar.set(cookieName, 'apple');
   expect(await session(other)).toBeNull();
+});
+
+test('Auth hooks see each sign-up and login after it commits, and never a link or a failure', async ({
+  onTestFinished,
+}) => {
+  const seen: string[] = [];
+  const pending: Promise<void>[] = [];
+  let databaseUrl = '';
+  const sessions = async () =>
+    (
+      await queryDatabase<{ n: number }>(
+        databaseUrl,
+        'SELECT count(*)::int AS n FROM session',
+      )
+    )[0]!.n;
+  const f = await fixture('multiple', 'explicit', {
+    hooks: {
+      userCreated: (...args: unknown[]) => {
+        seen.push(`created${args.length ? JSON.stringify(args) : ''}`);
+      },
+      // Another connection counts the row, so the hook runs after commit.
+      login: (login) => {
+        const facts = JSON.stringify(login);
+        pending.push(
+          sessions().then((n) => void seen.push(`login ${facts} ${n}`)),
+        );
+      },
+      onError: (error) => seen.push(`error ${String(error)}`),
+    },
+  });
+  databaseUrl = f.database.url;
+  onTestFinished(() => f.close());
+  const settled = async () => {
+    await Promise.all(pending.splice(0));
+    return seen.splice(0);
+  };
+  const browser = await f.browser();
+  await emailLogin(f, browser, 'oauth@example.test');
+  expect(await settled()).toEqual(['created', 'login {"method":"email"} 1']);
+  await login(f, browser, 'google', {}, true);
+  expect(await settled()).toEqual([]);
+  const other = await f.browser();
+  await login(f, other, 'google');
+  expect(await settled()).toEqual(['login {"method":"google"} 2']);
+  await login(f, other, 'apple', { badSignature: true });
+  expect(await settled()).toEqual([]);
+  await login(f, await f.browser(), 'github', {
+    email: 'second@example.test',
+  });
+  expect(await settled()).toEqual(['created', 'login {"method":"github"} 3']);
+});
+
+test('A hook that throws, rejects or never settles leaves sign-in working', async ({
+  onTestFinished,
+}) => {
+  const records: DiagnosticRecord[] = [];
+  const secret = 'hook-failure private@example.test';
+  const failing = await fixture('multiple', 'explicit', {
+    diagnostics: { sink: (record) => records.push(record) },
+    hooks: {
+      userCreated: () => {
+        throw new Error(secret);
+      },
+      login: async () => {
+        throw new Error(secret);
+      },
+    },
+  });
+  onTestFinished(() => failing.close());
+  const browser = await failing.browser();
+  await emailLogin(failing, browser, 'oauth@example.test');
+  const result = await login(failing, browser, 'google', {}, true);
+  expect(result.response.headers.get('location')).toBe(origin + '/');
+  await new Promise((done) => setTimeout(done, 10));
+  expect(
+    records.filter((record) => record.event === 'auth.hook.failed'),
+  ).toHaveLength(2);
+  expect(JSON.stringify(records)).not.toContain('private@example.test');
+
+  const handled: unknown[] = [];
+  const kept: Promise<unknown>[] = [];
+  const hanging = await fixture('multiple', 'explicit', {
+    waitUntil: (promise) => kept.push(promise),
+    hooks: {
+      userCreated: () => new Promise(() => {}),
+      login: () => new Promise(() => {}),
+      onError: (error) => {
+        handled.push(error);
+        throw error;
+      },
+    },
+  });
+  onTestFinished(() => hanging.close());
+  const other = await hanging.browser();
+  expect(
+    (await login(hanging, other, 'google')).response.headers.get('location'),
+  ).toBe(origin + '/');
+  expect((await session(other))?.user.email).toBe('oauth@example.test');
+  expect(
+    await emailLogin(hanging, await hanging.browser(), 'hang@example.test'),
+  ).toBeTruthy();
+  expect(handled).toEqual([]);
+  // Two sign-ups and two logins, each still pending, handed to the host to keep alive.
+  expect(kept).toHaveLength(4);
 });
 
 for (const oauthFirst of [false, true])

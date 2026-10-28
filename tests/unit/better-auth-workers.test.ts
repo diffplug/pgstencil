@@ -49,3 +49,27 @@ for (const diagnostics of [false, true])
         expect(JSON.stringify(records)).not.toContain(privateError);
       }
     });
+
+test('a Workers hook factory that throws leaves auth requests working', async () => {
+  const records: DiagnosticRecord[] = [];
+  const app = createBetterAuthWorker({
+    diagnostics: { sink: (record: DiagnosticRecord) => records.push(record) },
+    email: () => ({ send: async () => {} }),
+    hooks: () => {
+      throw new Error('private-hook@example.test');
+    },
+  });
+  // A route the inner app answers without the (unreachable) database.
+  const response = await app.fetch(
+    new Request('https://auth.example.test/api/providers'),
+    {
+      APP_ORIGIN: 'https://auth.example.test',
+      AUTH_SECRET: 'worker-test-secret-at-least-32-characters',
+      HYPERDRIVE: { connectionString: 'postgres://unused' },
+    },
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual([]);
+  expect(records.map((record) => record.event)).toContain('auth.hook.failed');
+  expect(JSON.stringify(records)).not.toContain('private-hook@example.test');
+});

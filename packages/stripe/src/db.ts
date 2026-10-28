@@ -22,6 +22,8 @@ export interface BillingDB {
     url: string | null;
     created_at: Timestamp;
     expires_at: Timestamp;
+    /** The caller's attribution label; null when none was given. */
+    ref: string | null;
   };
   subscriptions: {
     id: string;

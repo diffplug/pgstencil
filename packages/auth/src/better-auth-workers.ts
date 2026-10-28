@@ -5,7 +5,11 @@ import {
 } from 'pgstencil/diagnostics';
 import { Hono } from 'hono';
 import type { EmailSender } from 'pgstencil';
-import { createAuthApp, type AuthAppOptions } from './better-auth.ts';
+import {
+  createAuthApp,
+  type AuthAppOptions,
+  type AuthHooks,
+} from './better-auth.ts';
 import { authSecurityHeaders } from './better-auth-security.ts';
 import {
   oauthFromEnvironment,
@@ -39,6 +43,8 @@ export function createBetterAuthWorker<E extends BetterAuthWorkerBindings>(
     | 'errorPath'
   > & {
     email: (env: E) => EmailSender;
+    /** Builds this request's hooks; their pending work is kept alive with `waitUntil`. */
+    hooks?: (env: E) => AuthHooks;
   },
 ) {
   const app = new Hono<{ Bindings: E }>();
@@ -55,8 +61,28 @@ export function createBetterAuthWorker<E extends BetterAuthWorkerBindings>(
           const value = c.env[key as keyof E];
           if (typeof value === 'string') credentials[key] = value;
         }
+      let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
+      try {
+        const context = c.executionCtx;
+        waitUntil = (promise) => context.waitUntil(promise);
+      } catch {
+        // Hono throws when the caller passed no ExecutionContext.
+      }
+      let hooks: AuthHooks | undefined;
+      try {
+        hooks = options.hooks?.(c.env);
+      } catch (error) {
+        // A broken hook factory must not take sign-in down with it.
+        diagnostic('auth.hook.failed', {
+          reason: 'unexpected_error',
+          ...diagnosticError(error),
+        });
+      }
+      const { hooks: _factory, ...rest } = options;
       const auth = createAuthApp({
-        ...options,
+        ...rest,
+        ...(hooks ? { hooks } : {}),
+        ...(waitUntil ? { waitUntil } : {}),
         databaseUrl: c.env.HYPERDRIVE.connectionString,
         origin: c.env.APP_ORIGIN,
         secret: c.env.AUTH_SECRET,

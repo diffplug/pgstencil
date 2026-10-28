@@ -19,6 +19,12 @@ export interface BillingConfig<P extends string = string> {
   trialDays: number;
   /** Opt in to Stripe Managed Payments (merchant of record) on every Checkout Session. */
   managedPayments?: boolean;
+  /**
+   * Opt in to Stripe Tax on every Checkout Session: Checkout collects the
+   * address tax needs and saves it on the customer. Not with `managedPayments`,
+   * which calculates tax itself.
+   */
+  automaticTax?: boolean;
   webhookSecret: string;
   live: boolean;
   origin: string;
@@ -26,6 +32,17 @@ export interface BillingConfig<P extends string = string> {
   portalConfiguration?: string;
   /** Origins this billing setup redirects the browser to; defaults to Stripe's. */
   redirectOrigins?: readonly string[];
+}
+/** A completed subscription Checkout, read from its verified completion event. */
+export interface CompletedCheckout {
+  /** The operation ID `checkout` returned. */
+  operation: string;
+  ownerId: string;
+  /** The plan name the Checkout was opened for. */
+  plan: string;
+  priceId: string;
+  /** The `ref` passed to `checkout`, or null. */
+  ref: string | null;
 }
 export class BillingError extends Error {
   constructor(
@@ -39,6 +56,8 @@ const OPEN = ['pending', 'open'];
 /** Subscriptions that never held a purchase, or that Stripe no longer lists. */
 const UNPURCHASED = ['incomplete', 'incomplete_expired', 'missing'];
 const PLAN_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+/** Migration 006 checks the same pattern on `checkouts.ref`. */
+const CHECKOUT_REF = /^[a-z0-9:-]{1,40}$/;
 const SUBSCRIBED = [
   'trialing',
   'active',
@@ -56,6 +75,64 @@ const STRIPE_REDIRECT_ORIGINS = [
   'https://checkout.stripe.com',
   'https://billing.stripe.com',
 ];
+
+function checkRefundDays(refundDays: number): void {
+  if (!Number.isInteger(refundDays) || refundDays < 0 || refundDays > 730)
+    throw new Error('refundDays must be an integer between 0 and 730');
+}
+/** What the purchase rule reads: a synchronized row, as `status(owner).subscription`. */
+export interface PurchaseFacts {
+  status: string;
+  started_at: Date | null;
+  ended_at: Date | null;
+  trial_end: Date | null;
+}
+/**
+ * Whether a subscription is a completed purchase, and if not, why:
+ * `unpurchased` (Stripe never completed its first payment, or no longer
+ * lists it), `ended-in-trial` (never charged), or `refund-window` (ended
+ * within `refundDays` of starting, which is how an application's refund
+ * looks: pgstencil cannot tell it from an immediate cancellation).
+ */
+export type PurchaseStanding =
+  'purchased' | 'unpurchased' | 'ended-in-trial' | 'refund-window';
+/**
+ * The rule `purchaseCounts` applies, for one subscription: pure, with no
+ * I/O. Accepts a synchronized row or a Stripe subscription, such as a
+ * webhook event's object. A day is 24 hours.
+ */
+export function purchaseStanding(
+  subscription: PurchaseFacts | Stripe.Subscription,
+  options: { refundDays: number },
+): PurchaseStanding {
+  checkRefundDays(options.refundDays);
+  const facts: PurchaseFacts =
+    'start_date' in subscription
+      ? {
+          status: subscription.status,
+          started_at: instant(subscription.start_date),
+          ended_at:
+            subscription.ended_at === null
+              ? null
+              : instant(subscription.ended_at),
+          trial_end:
+            subscription.trial_end === null
+              ? null
+              : instant(subscription.trial_end),
+        }
+      : subscription;
+  if (UNPURCHASED.includes(facts.status)) return 'unpurchased';
+  const ended = facts.ended_at?.getTime();
+  if (ended === undefined) return 'purchased';
+  if (facts.trial_end && ended <= facts.trial_end.getTime())
+    return 'ended-in-trial';
+  if (
+    facts.started_at &&
+    ended < facts.started_at.getTime() + options.refundDays * 86_400_000
+  )
+    return 'refund-window';
+  return 'purchased';
+}
 
 /** Owns billing state; HTTP adapters supply an already-authorized owner ID. */
 export class Billing<P extends string = string> {
@@ -126,9 +203,21 @@ export class Billing<P extends string = string> {
       typeof config.managedPayments !== 'boolean'
     )
       throw new Error('managedPayments must be a boolean');
+    if (
+      config.automaticTax !== undefined &&
+      typeof config.automaticTax !== 'boolean'
+    )
+      throw new Error('automaticTax must be a boolean');
+    if (config.automaticTax && config.managedPayments)
+      throw new Error(
+        'Managed Payments calculates tax itself; do not also enable automaticTax',
+      );
   }
-  /** A price removed from the configuration no longer maps to a plan, so report it as unknown. */
-  private planOf(priceId: string | null | undefined): P | null {
+  /**
+   * The configured plan a Price grants, without I/O. A Price removed from the
+   * configuration no longer maps to a plan, so it reports null, as does null.
+   */
+  planOf(priceId: string | null | undefined): P | null {
     return (priceId && this.plans.get(priceId)) || null;
   }
   /** The Price a checkout started now would offer for `plan`. Unknown plans throw BillingError(400). */
@@ -215,7 +304,18 @@ export class Billing<P extends string = string> {
     email: string | null,
     /** Any configured plan name; untrusted input is fine, since unknown names throw BillingError(400). */
     plan: string,
+    options: {
+      /**
+       * An attribution label, such as the link that led here: 1-40 of
+       * `a-z`, `0-9`, `:` and `-`, else BillingError(400). An open
+       * Checkout keeps the ref it was opened with.
+       */
+      ref?: string | undefined;
+    } = {},
   ): Promise<{ id: string; url: string }> {
+    const ref = options.ref ?? null;
+    if (ref !== null && (typeof ref !== 'string' || !CHECKOUT_REF.test(ref)))
+      throw new BillingError('Invalid checkout ref.', 400);
     // Resolved before any Stripe write: an unknown plan or a bad offer creates nothing.
     const price = await this.offeredPrice(plan);
     const customer = await this.customer(ownerId, email);
@@ -263,6 +363,7 @@ export class Billing<P extends string = string> {
           url: null,
           created_at: this.time.now(),
           expires_at: new Date(this.time.now().getTime() + 60 * 60000),
+          ref,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -273,6 +374,8 @@ export class Billing<P extends string = string> {
       this.assertRetryable(operation.created_at, 'Checkout');
       const success = new URL(this.returnUrl);
       success.searchParams.set('checkout', operation.id);
+      // Only a stored ref is sent, so a retry repeats it and no ref adds no key.
+      const ref = operation.ref ? { pgstencil_ref: operation.ref } : {};
       const session = await this.stripe.checkout.sessions.create(
         {
           mode: 'subscription',
@@ -284,10 +387,19 @@ export class Billing<P extends string = string> {
           ...(this.config.managedPayments
             ? { managed_payments: { enabled: true } }
             : {}),
+          // The customer pgstencil created has no address; Stripe requires
+          // Checkout to save the one it collects before it can calculate tax.
+          ...(this.config.automaticTax
+            ? {
+                automatic_tax: { enabled: true },
+                customer_update: { address: 'auto' as const },
+              }
+            : {}),
           subscription_data: {
             metadata: {
               pgstencil_owner: ownerId,
               pgstencil_operation: operation.id,
+              ...ref,
             },
             ...(operation.trial_days
               ? {
@@ -298,7 +410,7 @@ export class Billing<P extends string = string> {
                 }
               : {}),
           },
-          metadata: { pgstencil_operation: operation.id },
+          metadata: { pgstencil_operation: operation.id, ...ref },
           success_url: success.href,
           cancel_url: this.returnUrl,
           expires_at: Math.floor(operation.expires_at.getTime() / 1000),
@@ -392,6 +504,35 @@ export class Billing<P extends string = string> {
         .where('id', '=', operation.id)
         .execute();
     }
+  }
+  /**
+   * What a verified `checkout.session.completed` event completed, including
+   * its `ref`; null for any other event, or a Checkout pgstencil did not open.
+   * Inside `webhook`'s `apply`, pass its transaction: the callback runs once per
+   * event, so counting there never counts a redelivery.
+   */
+  async completedCheckout(
+    event: Stripe.Event,
+    trx: Transaction<BillingDB> | Kysely<BillingDB> = this.db,
+  ): Promise<CompletedCheckout | null> {
+    if (event.type !== 'checkout.session.completed') return null;
+    const session = event.data.object;
+    const operationId = session.metadata?.pgstencil_operation;
+    if (session.mode !== 'subscription' || !operationId) return null;
+    const row = await trx
+      .selectFrom('checkouts')
+      .selectAll()
+      .where('id', '=', operationId)
+      .where('session_id', '=', session.id)
+      .executeTakeFirst();
+    if (!row || session.client_reference_id !== row.owner_id) return null;
+    return {
+      operation: row.id,
+      ownerId: row.owner_id,
+      plan: row.plan,
+      priceId: row.price_id,
+      ref: row.ref,
+    };
   }
   async portal(ownerId: string): Promise<string> {
     const account = await this.db
@@ -552,19 +693,16 @@ export class Billing<P extends string = string> {
   }
   /**
    * Completed purchases per Price, from synchronized rows without network
-   * requests. A subscription counts unless Stripe never completed its first
-   * payment (`incomplete`, `incomplete_expired`), no longer lists it
-   * (`missing`), or it ended no later than its trial or within `refundDays`
-   * of starting. Stripe does not tell pgstencil about refunds: an application
-   * that refunds also cancels immediately, inside that window.
+   * requests: the subscriptions whose `purchaseStanding` is `purchased`.
+   * Stripe does not tell pgstencil about refunds: an application that
+   * refunds also cancels immediately, inside the refund window.
    */
   async purchaseCounts(
     prices: readonly string[],
     options: { refundDays: number },
   ): Promise<Record<string, number>> {
     const { refundDays } = options;
-    if (!Number.isInteger(refundDays) || refundDays < 0 || refundDays > 730)
-      throw new Error('refundDays must be an integer between 0 and 730');
+    checkRefundDays(refundDays);
     const counts: Record<string, number> = Object.fromEntries(
       prices.map((price) => [price, 0]),
     );
@@ -587,7 +725,8 @@ export class Billing<P extends string = string> {
               eb(
                 'ended_at',
                 '>=',
-                sql<Date>`started_at + make_interval(days => ${refundDays})`,
+                // Hours, not days: a day is 24 hours in every session time zone, as in purchaseStanding.
+                sql<Date>`started_at + make_interval(hours => ${refundDays * 24})`,
               ),
             ]),
           ]),

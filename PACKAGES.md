@@ -1,6 +1,6 @@
 # Consuming pgstencil
 
-Three packages share version 0.4.0: `pgstencil` (infrastructure and test primitives), `@pgstencil/auth` (email/OAuth/session services and a JSON HTTP adapter), and `@pgstencil/stripe` (SaaS billing and StripeDev). They are published to npm as 0.x releases, so a minor release may break compatibility.
+Three packages share version 0.4.1: `pgstencil` (infrastructure and test primitives), `@pgstencil/auth` (email/OAuth/session services and a JSON HTTP adapter), and `@pgstencil/stripe` (SaaS billing and StripeDev). They are published to npm as 0.x releases, so a minor release may break compatibility.
 
 Run `pnpm packages:pack` to produce the three archives in `dist/packages`. They contain ESM JavaScript, TypeScript declarations, the MIT license, and required SQL/Compose assets. Workspace development uses source exports; packing switches the exports to compiled files. Nothing runs migrations during install.
 
@@ -176,6 +176,20 @@ it; logout retains it. The name is `__Host-pgstencil.last_login_method` on HTTPS
 and `pgstencil.last_login_method` locally. This is an untrusted display hint,
 never proof of identity or a replacement for a session. New browsers/private
 windows and cleared cookies have no hint.
+
+`hooks` lets an application count sign-ups and logins without reading auth
+tables. `userCreated()` runs after a new user's row commits and receives
+nothing. `login({ method })` runs after a login's session commits, where
+`method` is `email` or the provider ID; linking a provider to a signed-in
+account, a failed attempt and sign-out never call it. Neither receives a user,
+session, email or token. pgstencil starts each hook without awaiting it: a hook
+that throws, rejects or never settles cannot fail or delay authentication.
+`hooks.onError` receives the failure; without it, an `auth.hook.failed`
+diagnostic records it when diagnostics are enabled. A hook's pending promise is
+handed to `waitUntil` when the host supplies one; `createBetterAuthWorker`
+passes the request's `ExecutionContext.waitUntil` and takes
+`hooks: (env) => ({ ... })`, so a hook can reach its bindings. Hooks are
+best-effort counters: a crash between commit and hook loses the count.
 
 The Better Auth integration also supports `microsoft` with `MICROSOFT_CLIENT_ID`
 and `MICROSOFT_CLIENT_SECRET`. Its callback is `/api/auth/callback/microsoft`.

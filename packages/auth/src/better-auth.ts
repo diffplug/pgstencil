@@ -21,6 +21,7 @@ import {
   rateLimitStorage,
 } from './better-auth-security.ts';
 import {
+  providers,
   socialProviders,
   verifiedOidc,
   oauthRequest,
@@ -33,6 +34,23 @@ import {
   isIdentityEmail,
   providerSubject,
 } from './better-auth-email.ts';
+
+/** How a login proved identity: an email code, or a provider's ID. */
+export type LoginMethod = 'email' | Provider;
+
+/**
+ * Application callbacks for counting sign-ups and logins. Each runs after its
+ * write commits and is never awaited: a hook that throws, rejects or hangs
+ * cannot fail or delay authentication. None receives an identifier.
+ */
+export interface AuthHooks {
+  /** A new user's row committed. */
+  userCreated?: () => void | Promise<void>;
+  /** A login's session committed: an email code or a provider sign-in, never linking a provider. */
+  login?: (login: { method: LoginMethod }) => void | Promise<void>;
+  /** Receives whatever a hook throws or rejects with; by default an `auth.hook.failed` diagnostic records it. */
+  onError?: (error: unknown) => void;
+}
 
 export interface AuthOptions {
   database: ReturnType<typeof connectDatabase>;
@@ -55,6 +73,9 @@ export interface AuthOptions {
   /** Remember the last successful method in a readable, non-authenticating 30-day cookie. */
   rememberLoginMethod?: boolean;
   oauth?: OAuthSettings;
+  hooks?: AuthHooks;
+  /** Keeps a hook's pending promise alive past the response; the Workers adapter passes `ExecutionContext.waitUntil`. */
+  waitUntil?: (promise: Promise<unknown>) => void;
   appName?: string;
   successPath?: string;
   errorPath?: string;
@@ -63,6 +84,53 @@ export interface AuthOptions {
 export type AuthAppOptions = Omit<AuthOptions, 'database'> & {
   databaseUrl: string;
 };
+
+function hookFailed(options: AuthOptions, error: unknown) {
+  try {
+    if (options.hooks?.onError) options.hooks.onError(error);
+    else
+      diagnostic('auth.hook.failed', {
+        reason: 'unexpected_error',
+        ...diagnosticError(error),
+      });
+  } catch {
+    // An error handler that throws cannot reach authentication either.
+  }
+}
+
+/** Starts a hook without awaiting it, so its failure or delay stays out of the auth flow. */
+function runHook(options: AuthOptions, hook: () => void | Promise<void>) {
+  try {
+    const result = hook();
+    if (result && typeof result.then === 'function') {
+      const settled = Promise.resolve(result).catch((error) =>
+        hookFailed(options, error),
+      );
+      try {
+        options.waitUntil?.(settled);
+      } catch (error) {
+        hookFailed(options, error);
+      }
+    }
+  } catch (error) {
+    hookFailed(options, error);
+  }
+}
+
+/** Linking never creates a session, so only these two routes reach a login hook. */
+function loginMethod(
+  context: {
+    path?: string | undefined;
+    params?: Record<string, string | undefined> | undefined;
+  } | null,
+): LoginMethod | null {
+  if (context?.path === '/sign-in/email-otp') return 'email';
+  const provider = context?.params?.id;
+  return context?.path?.startsWith('/callback/') &&
+    providers.includes(provider as Provider)
+    ? (provider as Provider)
+    : null;
+}
 
 export function authOptions(options: AuthOptions): BetterAuthOptions {
   if (new URL(options.origin).origin !== options.origin)
@@ -222,7 +290,16 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
       disableSessionRefresh: true,
       cookieCache: { enabled: false },
     },
+    // Better Auth queues every `after` hook until its transaction commits.
     databaseHooks: {
+      user: {
+        create: {
+          after: async () => {
+            const hook = options.hooks?.userCreated;
+            if (hook) runHook(options, () => hook());
+          },
+        },
+      },
       account: {
         create: {
           before: async (account) => ({
@@ -254,6 +331,11 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
               emailAuthenticated: context?.path === '/sign-in/email-otp',
             },
           }),
+          after: async (_session, context) => {
+            const hook = options.hooks?.login;
+            const method = loginMethod(context);
+            if (hook && method) runHook(options, () => hook({ method }));
+          },
         },
       },
     },

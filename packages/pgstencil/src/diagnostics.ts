@@ -10,6 +10,7 @@ export type DiagnosticEvent =
   | 'auth.login.succeeded'
   | 'auth.rejected'
   | 'auth.logout'
+  | 'auth.hook.failed'
   | 'email.delivery.succeeded'
   | 'email.delivery.failed'
   | 'billing.webhook.received'
@@ -172,6 +173,7 @@ const events: DiagnosticEvent[] = [
   'auth.login.succeeded',
   'auth.rejected',
   'auth.logout',
+  'auth.hook.failed',
   'email.delivery.succeeded',
   'email.delivery.failed',
   'billing.webhook.received',

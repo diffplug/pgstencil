@@ -8,6 +8,7 @@ import { connectDatabase } from '../../packages/pgstencil/src/database.ts';
 import {
   Billing,
   BillingError,
+  purchaseStanding,
   STRIPE_API_VERSION,
   type BillingConfig,
   type BillingDB,
@@ -626,5 +627,184 @@ billingTest(
     expect(() =>
       build({ founding: { recognized: [], offer: () => 'price_a' } }),
     ).toThrow('needs a Stripe price');
+  },
+);
+
+test('automatic tax: Checkout calculates tax and saves the address it collects; not with Managed Payments', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture({ config: () => ({ automaticTax: true }) });
+  onTestFinished(() => f.close());
+  const { session } = await f.start();
+  const creation = f.dev.requests.find(
+    (r) => r.path === '/v1/checkout/sessions',
+  )!.body;
+  expect(creation).toMatchObject({
+    'automatic_tax[enabled]': 'true',
+    'customer_update[address]': 'auto',
+    payment_method_collection: 'always',
+    'subscription_data[trial_period_days]': '14',
+  });
+  expect(creation['managed_payments[enabled]']).toBeUndefined();
+  expect(session.automatic_tax.enabled).toBe(true);
+  f.dev.completeCheckout(session.id);
+  await f.deliver();
+  expect((await f.billing.status('alice')).access).toBe(true);
+  for (const config of [
+    { automaticTax: true, managedPayments: true },
+    { automaticTax: 'yes' as unknown as boolean },
+  ])
+    expect(
+      () =>
+        new Billing(f.db, f.dev.stripe, f.time, f.random, {
+          ...f.config,
+          ...config,
+        }),
+    ).toThrow(config.managedPayments ? 'Managed Payments' : 'automaticTax');
+});
+
+billingTest(
+  'a checkout ref is validated, kept across retries, and read back from the completion event',
+  async ({ f }) => {
+    for (const ref of ['Settings', '', 'a'.repeat(41), 'a b', 'a_b', 'é'])
+      await expect(
+        f.billing.checkout('alice', 'alice@example.test', 'monthly', { ref }),
+      ).rejects.toMatchObject({ status: 400 });
+    expect(f.dev.requests).toEqual([]);
+    // The first response is lost; the retry sends the stored ref, not its own.
+    f.dev.failNext('/v1/checkout/sessions', true);
+    await expect(
+      f.billing.checkout('alice', 'alice@example.test', 'monthly', {
+        ref: 'settings-voice',
+      }),
+    ).rejects.toThrow();
+    const checkout = await f.billing.checkout(
+      'alice',
+      'alice@example.test',
+      'monthly',
+      { ref: 'upsell:push' },
+    );
+    const creations = f.dev.requests.filter(
+      (r) => r.path === '/v1/checkout/sessions',
+    );
+    expect(creations).toHaveLength(2);
+    expect(creations[1]!.body).toEqual(creations[0]!.body);
+    expect(creations[0]!.body).toMatchObject({
+      'metadata[pgstencil_operation]': checkout.id,
+      'metadata[pgstencil_ref]': 'settings-voice',
+      'subscription_data[metadata][pgstencil_ref]': 'settings-voice',
+    });
+    const session = [...f.dev.checkouts.values()].find(
+      (s) => s.url === checkout.url,
+    )!;
+    f.dev.completeCheckout(session.id);
+    const completed: unknown[] = [];
+    while (f.dev.events.length) {
+      const { body, signature } = f.dev.signed(f.dev.events.shift()!);
+      await f.billing.webhook(body, signature, async (event, trx) => {
+        completed.push(await f.billing.completedCheckout(event, trx));
+      });
+    }
+    expect(completed).toEqual([
+      {
+        operation: checkout.id,
+        ownerId: 'alice',
+        plan: 'monthly',
+        priceId: f.dev.prices.monthly,
+        ref: 'settings-voice',
+      },
+      null,
+    ]);
+    // Without a ref, Checkout carries no ref key and completion reports null.
+    const bob = await f.start('monthly', 'bob');
+    const body = f.dev.requests.at(-1)!.body;
+    expect(
+      Object.keys(body).filter((key) => key.includes('pgstencil_ref')),
+    ).toEqual([]);
+    f.dev.completeCheckout(bob.session.id);
+    const event = f.dev.events.find(
+      (e) => e.type === 'checkout.session.completed',
+    )!;
+    expect((await f.billing.completedCheckout(event))?.ref).toBeNull();
+  },
+);
+
+billingTest(
+  'the exported plan and purchase rules agree with status and purchaseCounts',
+  async ({ f }) => {
+    expect(f.billing.planOf(f.dev.prices.yearly)).toBe('yearly');
+    expect(f.billing.planOf('price_retired')).toBeNull();
+    expect(f.billing.planOf(null)).toBeNull();
+    const day = 86_400_000;
+    const at = (days: number) => new Date(f.time.now().getTime() + days * day);
+    const cases = {
+      open: ['active', at(0), null, null],
+      unpaid: ['incomplete', at(0), null, null],
+      gone: ['missing', at(0), at(40), null],
+      trialOnly: ['canceled', at(0), at(14), at(14)],
+      refundedAfterTrial: ['canceled', at(0), at(15), at(14)],
+      paidAfterTrial: ['canceled', at(0), at(45), at(14)],
+      refunded: ['canceled', at(0), at(30 - 1 / 86_400_000), null],
+      atWindow: ['canceled', at(0), at(30), null],
+      legacy: ['canceled', null, at(1), null],
+    } as const;
+    const rows = Object.entries(cases).map(
+      ([id, [status, started_at, ended_at, trial_end]]) => ({
+        id,
+        owner_id: 'alice',
+        price_id: `price_${id}`,
+        status,
+        started_at,
+        ended_at,
+        trial_end,
+        period_end: at(30),
+        cancel_at_period_end: false,
+        updated_at: at(0),
+      }),
+    );
+    await f.billing.account('alice', 'alice@example.test');
+    await f.billing.db.insertInto('subscriptions').values(rows).execute();
+    const standings = Object.fromEntries(
+      rows.map((row) => [row.id, purchaseStanding(row, { refundDays: 30 })]),
+    );
+    expect(standings).toEqual({
+      open: 'purchased',
+      unpaid: 'unpurchased',
+      gone: 'unpurchased',
+      trialOnly: 'ended-in-trial',
+      refundedAfterTrial: 'refund-window',
+      paidAfterTrial: 'purchased',
+      refunded: 'refund-window',
+      atWindow: 'purchased',
+      legacy: 'purchased',
+    });
+    const counts = await f.billing.purchaseCounts(
+      rows.map((row) => row.price_id),
+      { refundDays: 30 },
+    );
+    expect(counts).toEqual(
+      Object.fromEntries(
+        rows.map((row) => [
+          row.price_id,
+          standings[row.id] === 'purchased' ? 1 : 0,
+        ]),
+      ),
+    );
+    // A webhook's Stripe subscription reads the same way as its synchronized row.
+    const { session } = await f.start('monthly', 'bob');
+    const sub = f.dev.completeCheckout(session.id);
+    await f.deliver();
+    f.time.advanceDays(3);
+    f.dev.transition(sub.id, 'cancel');
+    const canceled = f.dev.events.at(-1)!.data.object as typeof sub;
+    await f.deliver();
+    const row = (await f.billing.status('bob')).subscription!;
+    expect(purchaseStanding(canceled, { refundDays: 30 })).toBe(
+      'ended-in-trial',
+    );
+    expect(purchaseStanding(row, { refundDays: 30 })).toBe('ended-in-trial');
+    expect(() => purchaseStanding(row, { refundDays: 1.5 })).toThrow(
+      'refundDays',
+    );
   },
 );

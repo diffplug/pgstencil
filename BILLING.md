@@ -15,6 +15,7 @@ Construct `Billing` with a Kysely connection, a Stripe SDK instance, your `Time`
   prices: { monthly: 'price_...', yearly: 'price_...' },
   trialDays: 14,
   // managedPayments: true,
+  // automaticTax: true,
   webhookSecret: process.env.STRIPE_WEBHOOK_SECRET!,
   live: true,
   origin: 'https://your-app.example',
@@ -63,6 +64,10 @@ pgstencil reads subscriptions, not invoices, charges or refunds. A refund alone 
 ### Managed Payments
 
 `managedPayments: true` sets `managed_payments: { enabled: true }` on every Checkout Session, making Stripe the merchant of record; the installed Stripe SDK types that parameter at `STRIPE_API_VERSION`. Checkout still sends `payment_method_collection: 'always'` and `payment_method_types: ['card']`, and the trial parameters when a trial applies. StripeDev records the parameter but does not model Managed Payments, so confirm in a Stripe sandbox that your account accepts that combination before going live. Changing the flag while a Checkout creation is still retryable changes its idempotent parameters, so Stripe rejects that retry.
+
+### Stripe Tax
+
+`automaticTax: true` sets `automatic_tax: { enabled: true }` on every Checkout Session, so Stripe Tax calculates tax on the first payment and on the subscription's renewals. pgstencil creates each customer without an address, which Stripe refuses for automatic tax, so the session also sends `customer_update: { address: 'auto' }`: Checkout collects the address tax needs (`billing_address_collection` stays Stripe's default `auto`) and saves it on the customer for renewals. Card collection and trial parameters are unchanged. The constructor refuses `automaticTax` together with `managedPayments`, because Stripe rejects `automatic_tax` on a Managed Payments session, which calculates tax itself. Tax registrations, product tax codes and Price tax behavior are Stripe account settings. StripeDev records the parameters and, like Stripe, rejects automatic tax for a customer without an address unless the session saves one, but it calculates no tax; confirm real amounts in a Stripe sandbox before going live. Changing the flag while a Checkout creation is still retryable changes its idempotent parameters, so Stripe rejects that retry.
 
 ## Production Stripe setup
 

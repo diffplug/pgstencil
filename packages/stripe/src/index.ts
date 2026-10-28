@@ -19,6 +19,12 @@ export interface BillingConfig<P extends string = string> {
   trialDays: number;
   /** Opt in to Stripe Managed Payments (merchant of record) on every Checkout Session. */
   managedPayments?: boolean;
+  /**
+   * Opt in to Stripe Tax on every Checkout Session: Checkout collects the
+   * address tax needs and saves it on the customer. Not with `managedPayments`,
+   * which calculates tax itself.
+   */
+  automaticTax?: boolean;
   webhookSecret: string;
   live: boolean;
   origin: string;
@@ -126,6 +132,15 @@ export class Billing<P extends string = string> {
       typeof config.managedPayments !== 'boolean'
     )
       throw new Error('managedPayments must be a boolean');
+    if (
+      config.automaticTax !== undefined &&
+      typeof config.automaticTax !== 'boolean'
+    )
+      throw new Error('automaticTax must be a boolean');
+    if (config.automaticTax && config.managedPayments)
+      throw new Error(
+        'Managed Payments calculates tax itself; do not also enable automaticTax',
+      );
   }
   /** A price removed from the configuration no longer maps to a plan, so report it as unknown. */
   private planOf(priceId: string | null | undefined): P | null {
@@ -283,6 +298,14 @@ export class Billing<P extends string = string> {
           payment_method_types: ['card'],
           ...(this.config.managedPayments
             ? { managed_payments: { enabled: true } }
+            : {}),
+          // The customer pgstencil created has no address; Stripe requires
+          // Checkout to save the one it collects before it can calculate tax.
+          ...(this.config.automaticTax
+            ? {
+                automatic_tax: { enabled: true },
+                customer_update: { address: 'auto' as const },
+              }
             : {}),
           subscription_data: {
             metadata: {

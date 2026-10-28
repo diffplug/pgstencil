@@ -628,3 +628,36 @@ billingTest(
     ).toThrow('needs a Stripe price');
   },
 );
+
+test('automatic tax: Checkout calculates tax and saves the address it collects; not with Managed Payments', async ({
+  onTestFinished,
+}) => {
+  const f = await fixture({ config: () => ({ automaticTax: true }) });
+  onTestFinished(() => f.close());
+  const { session } = await f.start();
+  const creation = f.dev.requests.find(
+    (r) => r.path === '/v1/checkout/sessions',
+  )!.body;
+  expect(creation).toMatchObject({
+    'automatic_tax[enabled]': 'true',
+    'customer_update[address]': 'auto',
+    payment_method_collection: 'always',
+    'subscription_data[trial_period_days]': '14',
+  });
+  expect(creation['managed_payments[enabled]']).toBeUndefined();
+  expect(session.automatic_tax.enabled).toBe(true);
+  f.dev.completeCheckout(session.id);
+  await f.deliver();
+  expect((await f.billing.status('alice')).access).toBe(true);
+  for (const config of [
+    { automaticTax: true, managedPayments: true },
+    { automaticTax: 'yes' as unknown as boolean },
+  ])
+    expect(
+      () =>
+        new Billing(f.db, f.dev.stripe, f.time, f.random, {
+          ...f.config,
+          ...config,
+        }),
+    ).toThrow(config.managedPayments ? 'Managed Payments' : 'automaticTax');
+});

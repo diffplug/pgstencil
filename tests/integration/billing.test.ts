@@ -10,6 +10,7 @@ import {
   BillingError,
   purchaseStanding,
   STRIPE_API_VERSION,
+  SUBSCRIBED,
   type BillingConfig,
   type BillingDB,
 } from '../../packages/stripe/src/index.ts';
@@ -19,6 +20,10 @@ import {
   type StripeDevOptions,
 } from '../../packages/stripe/src/testing.ts';
 import { stableJson } from '../../packages/pgstencil/src/snapshots.ts';
+import {
+  queryDatabase,
+  withClient,
+} from '../../packages/pgstencil/src/postgres.ts';
 
 async function fixture(
   options: {
@@ -805,6 +810,188 @@ billingTest(
     expect(purchaseStanding(row, { refundDays: 30 })).toBe('ended-in-trial');
     expect(() => purchaseStanding(row, { refundDays: 1.5 })).toThrow(
       'refundDays',
+    );
+  },
+);
+
+billingTest(
+  'owner_access is the access rule status() applies, for application SQL under a read-only grant',
+  async ({ f }) => {
+    expect(SUBSCRIBED).toEqual([
+      'trialing',
+      'active',
+      'past_due',
+      'unpaid',
+      'paused',
+      'incomplete',
+    ]);
+    const statuses = [
+      ...SUBSCRIBED,
+      'canceled',
+      'incomplete_expired',
+      'missing',
+    ];
+    const day = 86_400_000;
+    const at = (days: number) => new Date(f.time.now().getTime() + days * day);
+    const row = (
+      id: string,
+      owner: string,
+      status: string,
+      period: number,
+      trial: number | null,
+    ) => ({
+      id,
+      owner_id: owner,
+      price_id: f.dev.prices.monthly,
+      status,
+      started_at: at(-1),
+      ended_at: null,
+      period_end: at(period),
+      trial_end: trial === null ? null : at(trial),
+      cancel_at_period_end: false,
+      updated_at: at(0),
+    });
+    // Alone, each status with its period and trial ending before, at and
+    // after the clock; beside a valid `active` one, each other status.
+    const expected = new Map<string, boolean>();
+    const rows = [];
+    for (const status of statuses) {
+      for (const [name, period, trial] of [
+        ['past', -1, -1],
+        ['now', 0, 0],
+        ['period', 1, -1],
+        ['trial', -1, 1],
+        ['both', 1, 1],
+        ['notrial', 1, null],
+      ] as const) {
+        const owner = `${status}-${name}`;
+        rows.push(row(`sub_${owner}`, owner, status, period, trial));
+        expected.set(
+          owner,
+          (status === 'active' && period > 0) ||
+            (status === 'trialing' && trial !== null && trial > 0),
+        );
+      }
+      const owner = `pair-${status}`;
+      rows.push(row(`sub_${owner}_a`, owner, 'active', 1, null));
+      rows.push(row(`sub_${owner}_b`, owner, status, 1, 1));
+      expected.set(owner, !SUBSCRIBED.includes(status));
+    }
+    await f.billing.db
+      .insertInto('accounts')
+      .values(
+        [...expected.keys()].map((owner) => ({
+          owner_id: owner,
+          email: null,
+          created_at: at(0),
+        })),
+      )
+      .execute();
+    await f.billing.db.insertInto('subscriptions').values(rows).execute();
+    const reader = `SELECT owner_id AS owner FROM pgstencil_billing.owner_access
+      WHERE access_until > $1`;
+    const granted = new Set(
+      (
+        await queryDatabase<{ owner: string }>(f.database.url, reader, [
+          f.time.now(),
+        ])
+      ).map((r) => r.owner),
+    );
+    for (const [owner, access] of expected) {
+      expect([owner, (await f.billing.status(owner)).access]).toEqual([
+        owner,
+        access,
+      ]);
+      expect([owner, granted.has(owner)]).toEqual([owner, access]);
+    }
+    expect(granted.size).toBeGreaterThan(3);
+    // A role granted only the view reads it, never the table beneath it.
+    // Roles are cluster-wide, so this one lives only inside a transaction.
+    const role = `pgstencil_reader_${f.random.bytes(6).toString('hex')}`;
+    await withClient(f.database.url, async (client) => {
+      await client.query('BEGIN');
+      try {
+        await client.query(`CREATE ROLE ${role}`);
+        await client.query(
+          `GRANT USAGE ON SCHEMA pgstencil_billing TO ${role}`,
+        );
+        await client.query(
+          `GRANT SELECT ON pgstencil_billing.owner_access TO ${role}`,
+        );
+        await client.query(`SET LOCAL ROLE ${role}`);
+        const read = await client.query(reader, [f.time.now()]);
+        expect(read.rows.length).toBe(granted.size);
+        await expect(
+          client.query('SELECT 1 FROM pgstencil_billing.subscriptions'),
+        ).rejects.toThrow('permission denied');
+      } finally {
+        await client.query('ROLLBACK');
+      }
+    });
+  },
+);
+
+billingTest(
+  'reconcileStale repairs a bounded batch of owners whose renewal webhook went missing',
+  async ({ f }) => {
+    const subs: Record<string, string> = {};
+    for (const owner of ['alice', 'bob', 'carol']) {
+      const { session } = await f.start('monthly', owner);
+      subs[owner] = f.dev.completeCheckout(session.id).id;
+    }
+    await f.deliver();
+    f.time.advanceDays(15);
+    const dave = await f.start('monthly', 'dave');
+    f.dev.completeCheckout(dave.session.id);
+    await f.deliver();
+    // Stripe converts two trials, but their webhooks never arrive; carol's
+    // has not been moved on yet.
+    f.dev.transition(subs.alice!, 'renew');
+    f.dev.transition(subs.bob!, 'renew');
+    f.dev.events.length = 0;
+    const access = async () =>
+      Object.fromEntries(
+        await Promise.all(
+          ['alice', 'bob', 'carol', 'dave'].map(async (owner) => [
+            owner,
+            (await f.billing.status(owner)).access,
+          ]),
+        ),
+      );
+    expect(await access()).toEqual({
+      alice: false,
+      bob: false,
+      carol: false,
+      dave: true,
+    });
+    const first = await f.billing.reconcileStale({ limit: 2 });
+    expect(first.failed).toEqual([]);
+    expect(first.reconciled).toHaveLength(2);
+    expect(
+      first.reconciled.every((owner) =>
+        ['alice', 'bob', 'carol'].includes(owner),
+      ),
+    ).toBe(true);
+    f.dev.failNext('/v1/subscriptions');
+    const second = await f.billing.reconcileStale({ limit: 10 });
+    // The remaining stale owners: carol, and whichever of alice and bob waited.
+    expect(second.reconciled.length + second.failed.length).toBe(
+      first.reconciled.includes('carol') ? 2 : 1,
+    );
+    expect(second.failed).toHaveLength(1);
+    await f.billing.reconcileStale({ limit: 10 });
+    expect(await access()).toEqual({
+      alice: true,
+      bob: true,
+      carol: false,
+      dave: true,
+    });
+    // Only carol, whose trial Stripe has not converted, is still stale.
+    expect((await f.billing.reconcileStale({ limit: 10 })).reconciled).toEqual([
+      'carol',
+    ]);
+    await expect(f.billing.reconcileStale({ limit: 0 })).rejects.toThrow(
+      'limit',
     );
   },
 );

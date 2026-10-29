@@ -58,14 +58,19 @@ const UNPURCHASED = ['incomplete', 'incomplete_expired', 'missing'];
 const PLAN_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 /** Migration 006 checks the same pattern on `checkouts.ref`. */
 const CHECKOUT_REF = /^[a-z0-9:-]{1,40}$/;
-const SUBSCRIBED = [
+/**
+ * The statuses of a subscription Stripe still holds, paid up or not: an owner
+ * with one cannot check out again, and access needs exactly one. Migration
+ * 007's `owner_access` view lists the same statuses.
+ */
+export const SUBSCRIBED: readonly string[] = Object.freeze([
   'trialing',
   'active',
   'past_due',
   'unpaid',
   'paused',
   'incomplete',
-];
+]);
 const idOf = (value: string | { id: string } | null): string | null =>
   typeof value === 'string' ? value : (value?.id ?? null);
 const instant = (seconds: number) => new Date(seconds * 1000);
@@ -653,19 +658,69 @@ export class Billing<P extends string = string> {
       .transaction()
       .execute((trx) => this.synchronize(trx, ownerId));
   }
-  async status(ownerId: string) {
-    const account = await this.db
-      .selectFrom('accounts')
-      .selectAll()
-      .where('owner_id', '=', ownerId)
-      .executeTakeFirst();
-    const subscriptions = await this.db
-      .selectFrom('subscriptions')
-      .selectAll()
-      .where('owner_id', '=', ownerId)
-      .orderBy('updated_at', 'desc')
-      .orderBy('id')
+  /**
+   * Reconciles up to `limit` owners, in a random order, holding an `active`
+   * or `trialing` subscription yet no access by `owner_access`: a renewal or
+   * trial conversion whose webhook never arrived, or more than one current
+   * subscription. For a scheduled job; every chosen owner is tried.
+   */
+  async reconcileStale(options: { limit: number }): Promise<{
+    reconciled: string[];
+    failed: { ownerId: string; error: unknown }[];
+  }> {
+    const { limit } = options;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000)
+      throw new Error('limit must be an integer between 1 and 1000');
+    const now = this.time.now();
+    // Seeded from the injected randomness, so tests replay one order.
+    const seed = token(this.random);
+    const owners = await this.db
+      .selectFrom('subscriptions as s')
+      .select('s.owner_id')
+      .where('s.status', 'in', ['active', 'trialing'])
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom('owner_access as a')
+              .whereRef('a.owner_id', '=', 's.owner_id')
+              .where('a.access_until', '>', now),
+          ),
+        ),
+      )
+      .groupBy('s.owner_id')
+      .orderBy(sql`md5(s.owner_id || ${seed})`)
+      .limit(limit)
       .execute();
+    const reconciled: string[] = [];
+    const failed: { ownerId: string; error: unknown }[] = [];
+    for (const { owner_id: ownerId } of owners)
+      await this.reconcile(ownerId).then(
+        () => reconciled.push(ownerId),
+        (error: unknown) => failed.push({ ownerId, error }),
+      );
+    return { reconciled, failed };
+  }
+  async status(ownerId: string) {
+    const [account, subscriptions, entitled] = await Promise.all([
+      this.db
+        .selectFrom('accounts')
+        .selectAll()
+        .where('owner_id', '=', ownerId)
+        .executeTakeFirst(),
+      this.db
+        .selectFrom('subscriptions')
+        .selectAll()
+        .where('owner_id', '=', ownerId)
+        .orderBy('updated_at', 'desc')
+        .orderBy('id')
+        .execute(),
+      // The access rule lives in the view, so application SQL reads the same one.
+      this.db
+        .selectFrom('owner_access')
+        .select('access_until')
+        .where('owner_id', '=', ownerId)
+        .executeTakeFirst(),
+    ]);
     const current = subscriptions.filter((sub) =>
       SUBSCRIBED.includes(sub.status),
     );
@@ -675,11 +730,7 @@ export class Billing<P extends string = string> {
         ? subscription.trial_end
         : subscription?.period_end;
     const access =
-      current.length === 1 &&
-      !!subscription &&
-      ['trialing', 'active'].includes(subscription.status) &&
-      !!until &&
-      until > this.time.now();
+      !!entitled?.access_until && entitled.access_until > this.time.now();
     const trialEligible = !account?.trial_used_at;
     return {
       access,

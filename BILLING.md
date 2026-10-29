@@ -30,7 +30,23 @@ The HTTP adapter supplies the authorized billing-owner ID. An owner can be a use
 
 `checkout(owner, email, plan, { ref })` takes an optional attribution label, such as the link that led to the purchase: 1–40 lowercase letters, digits, `:` or `-`, else `BillingError` 400 before any write. It is stored on the operation (migration 006) and sent as `pgstencil_ref` in the Checkout Session's and subscription's metadata; pgstencil writes that key itself, so a ref cannot replace `pgstencil_owner` or `pgstencil_operation`. An open Checkout keeps the ref it was opened with, and its retries resend it, so a later click's ref never changes its idempotent parameters; a checkout without a ref sends exactly the parameters it did before. `completedCheckout(event, trx)` reads a verified `checkout.session.completed` event back as `{ operation, ownerId, plan, priceId, ref }` from the stored operation, and returns null for any other event or a Checkout pgstencil did not open. Call it inside `webhook`'s `apply` with its transaction to count a completion exactly once, never on redelivery.
 
-Access requires exactly one `trialing` or `active` subscription on a recognized Price and an unexpired trial or current billing period. Other statuses deny access. There is no implicit payment-failure grace period. Cancellation scheduled for period end retains access until that deadline. Trial eligibility is consumed once a subscription is observed and never resets when it is canceled. This is per billing owner, not a guarantee against a person creating multiple accounts.
+Access requires exactly one current subscription — a status in the exported `SUBSCRIBED` list (`trialing`, `active`, `past_due`, `unpaid`, `paused`, `incomplete`) — and that it is `trialing` before its trial end or `active` before its period end. Other statuses deny access. There is no implicit payment-failure grace period. Cancellation scheduled for period end retains access until that deadline. Trial eligibility is consumed once a subscription is observed and never resets when it is canceled. This is per billing owner, not a guarantee against a person creating multiple accounts.
+
+## Access in SQL
+
+Migration 007's view `pgstencil_billing.owner_access` holds that rule once, for an application's own queries: one row per owner holding exactly one current subscription, with its `subscription_id`, `price_id`, `status`, and `access_until`, the instant it stops granting access (null when its status grants none). An owner grants access at time T when its row has `access_until > T`; an owner without a row has none. `status()` reads the same view and compares against the injected clock, so the two cannot disagree; application SQL passes the clock it means, such as `now()`:
+
+```sql
+SELECT EXISTS (
+  SELECT FROM pgstencil_billing.owner_access a
+  WHERE a.owner_id = $1 AND a.access_until > now()
+    AND a.price_id = ANY ($2::text[])  -- only on these Prices, if wanted
+) AS entitled
+```
+
+A filter on `owner_id` reaches the subscriptions index through the view. The view runs with its owner's privileges, so a read-only role needs only `GRANT USAGE ON SCHEMA pgstencil_billing` and `GRANT SELECT ON pgstencil_billing.owner_access`, and no grant on the tables beneath it. Grant it after migrating, since the schema is the package's.
+
+`reconcileStale({ limit })` repairs missed renewals from a scheduled job: it reconciles up to `limit` (1–1000) owners, in a random order, that hold an `active` or `trialing` subscription yet no access by `owner_access` at the injected clock — a renewal or trial conversion whose webhook never arrived, or more than one current subscription. Every chosen owner is tried; it returns `{ reconciled, failed }`, the owner IDs reconciled and each failure as `{ ownerId, error }`. An owner Stripe has not moved on yet stays stale and is chosen again on a later run.
 
 ## Plans and prices
 

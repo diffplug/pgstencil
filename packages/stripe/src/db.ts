@@ -38,6 +38,18 @@ export interface BillingDB {
     cancel_at_period_end: boolean;
     updated_at: Timestamp;
   };
+  /**
+   * Migration 007's view: one row per owner holding exactly one current
+   * subscription. Access at time T is `access_until > T`.
+   */
+  owner_access: {
+    owner_id: string;
+    subscription_id: string;
+    price_id: string;
+    status: string;
+    /** When this subscription stops granting access; null when its status grants none. */
+    access_until: Date | null;
+  };
   events: {
     id: string;
     type: string;

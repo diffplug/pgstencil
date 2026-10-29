@@ -1,6 +1,6 @@
 import { diagnostic, diagnosticError } from 'pgstencil/diagnostics';
 import Stripe from 'stripe';
-import { sql, type Kysely, type Transaction } from 'kysely';
+import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import { token, type Time, type RandomSource } from 'pgstencil';
 import type { BillingDB } from './db.ts';
 export type { BillingDB } from './db.ts';
@@ -33,6 +33,24 @@ export interface BillingConfig<P extends string = string> {
   /** Origins this billing setup redirects the browser to; defaults to Stripe's. */
   redirectOrigins?: readonly string[];
 }
+/** A synchronized subscription row, as `status(owner).subscription` reads it. */
+export type BillingSubscription = Selectable<BillingDB['subscriptions']>;
+/** What `webhook` resolved an event to, read inside its transaction. */
+export interface WebhookContext {
+  /** The billing owner the event names through its `customer`; null for one pgstencil did not create. */
+  ownerId: string | null;
+  /**
+   * For a `customer.subscription.*` event, that subscription's synchronized
+   * row after this event's resync, its `end_reason` included; else null.
+   */
+  subscription: BillingSubscription | null;
+}
+/** Application database effects that join a webhook's commit and retry boundary. */
+export type WebhookApply = (
+  event: Stripe.Event,
+  trx: Transaction<BillingDB>,
+  context: WebhookContext,
+) => Promise<void>;
 /** A completed subscription Checkout, read from its verified completion event. */
 export interface CompletedCheckout {
   /** The operation ID `checkout` returned. */
@@ -68,8 +86,8 @@ const OPEN = ['pending', 'open'];
 /** Subscriptions that never held a purchase, or that Stripe no longer lists. */
 const UNPURCHASED = ['incomplete', 'incomplete_expired', 'missing'];
 const PLAN_NAME = /^[A-Za-z0-9_-]{1,64}$/;
-/** Migration 006 checks the same pattern on `checkouts.ref`. */
-const CHECKOUT_REF = /^[a-z0-9:-]{1,40}$/;
+/** Migrations 006 and 008 check the same pattern on `checkouts.ref` and `subscriptions.end_reason`. */
+const LABEL = /^[a-z0-9:-]{1,40}$/;
 /**
  * The statuses of a subscription Stripe still holds, paid up or not: an owner
  * with one cannot check out again, and access needs exactly one. Migration
@@ -350,7 +368,7 @@ export class Billing<P extends string = string> {
     priceId: string;
   }> {
     const ref = options.ref ?? null;
-    if (ref !== null && (typeof ref !== 'string' || !CHECKOUT_REF.test(ref)))
+    if (ref !== null && (typeof ref !== 'string' || !LABEL.test(ref)))
       throw new BillingError('Invalid checkout ref.', 400);
     const { replace, expectPrice } = options;
     // Resolved before any Stripe write: an unknown plan or a bad offer creates nothing.
@@ -706,6 +724,51 @@ export class Billing<P extends string = string> {
         .execute();
     }
   }
+  /**
+   * Ends `ownerId`'s subscription `subscriptionId` in Stripe at once, with no
+   * proration and no final invoice, and records `reason` (1-40 of `a-z`,
+   * `0-9`, `:` and `-`) as its row's `end_reason` before releasing the
+   * owner's lock, so the `customer.subscription.deleted` webhook reads it;
+   * then reconciles. Returns false, changing nothing, for one already ended.
+   * A subscription that is not the owner's throws BillingError(404).
+   */
+  async end(
+    ownerId: string,
+    subscriptionId: string,
+    options: { reason: string },
+  ): Promise<boolean> {
+    const { reason } = options;
+    if (typeof reason !== 'string' || !LABEL.test(reason))
+      throw new Error('An end reason is 1-40 of a-z, 0-9, : and -');
+    const ended = await this.db.transaction().execute(async (trx) => {
+      const account = await trx
+        .selectFrom('accounts')
+        .select('owner_id')
+        .where('owner_id', '=', ownerId)
+        .executeTakeFirst();
+      if (account) await this.synchronize(trx, ownerId);
+      const row = await trx
+        .selectFrom('subscriptions')
+        .select('status')
+        .where('id', '=', subscriptionId)
+        .where('owner_id', '=', ownerId)
+        .executeTakeFirst();
+      if (!row) throw new BillingError('Subscription not found.', 404);
+      if (!SUBSCRIBED.includes(row.status)) return false;
+      await this.stripe.subscriptions.cancel(subscriptionId, {
+        prorate: false,
+        invoice_now: false,
+      });
+      await trx
+        .updateTable('subscriptions')
+        .set({ end_reason: reason })
+        .where('id', '=', subscriptionId)
+        .execute();
+      return true;
+    });
+    if (ended) await this.reconcile(ownerId);
+    return ended;
+  }
   async reconcile(ownerId: string): Promise<void> {
     await this.db
       .transaction()
@@ -874,7 +937,7 @@ export class Billing<P extends string = string> {
     body: Buffer | string,
     signature: string,
     /** Application database effects join the same commit and retry boundary. */
-    apply?: (event: Stripe.Event, trx: Transaction<BillingDB>) => Promise<void>,
+    apply?: WebhookApply,
   ): Promise<void> {
     let event: Stripe.Event;
     try {
@@ -915,15 +978,28 @@ export class Billing<P extends string = string> {
           customer?: string | { id: string } | null;
         };
         const customer = idOf(object.customer ?? null);
+        let ownerId: string | null = null;
         if (customer) {
           const account = await trx
             .selectFrom('accounts')
             .select('owner_id')
             .where('customer_id', '=', customer)
             .executeTakeFirst();
-          if (account) await this.synchronize(trx, account.owner_id);
+          ownerId = account?.owner_id ?? null;
+          if (ownerId) await this.synchronize(trx, ownerId);
         }
-        if (apply) await apply(event, trx);
+        if (apply) {
+          const subscription =
+            ownerId && event.type.startsWith('customer.subscription.')
+              ? ((await trx
+                  .selectFrom('subscriptions')
+                  .selectAll()
+                  .where('id', '=', (event.data.object as { id: string }).id)
+                  .where('owner_id', '=', ownerId)
+                  .executeTakeFirst()) ?? null)
+              : null;
+          await apply(event, trx, { ownerId, subscription });
+        }
         const now = this.time.now();
         const processed = {
           processed_at: now,

@@ -95,7 +95,9 @@ CREATE TABLE pgstencil_billing.subscriptions (
     cancel_at_period_end boolean NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     started_at timestamp with time zone,
-    ended_at timestamp with time zone
+    ended_at timestamp with time zone,
+    end_reason text,
+    CONSTRAINT subscriptions_end_reason_check CHECK ((end_reason ~ '^[a-z0-9:-]{1,40}$'::text))
 );
 
 

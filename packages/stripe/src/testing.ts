@@ -169,30 +169,31 @@ export async function createStripeDev(
     save();
     return session;
   }
+  /** An immediate cancellation, as `subscriptions.cancel` or a refund makes. */
+  function cancel(sub: Stripe.Subscription) {
+    sub.status = 'canceled';
+    sub.canceled_at = seconds();
+    sub.ended_at = seconds();
+    return event('customer.subscription.deleted', sub);
+  }
   function transition(
     subscriptionId: string,
     action: 'renew' | 'payment-failed' | 'cancel' | 'cancel-at-period-end',
   ) {
     const sub = subscriptions.get(subscriptionId);
     if (!sub) throw new Error('Subscription not found');
-    if (action === 'cancel-at-period-end') sub.cancel_at_period_end = true;
-    else if (action === 'cancel') {
-      // An immediate cancellation, as when an application refunds.
-      sub.status = 'canceled';
-      sub.canceled_at = seconds();
-      sub.ended_at = seconds();
-    } else {
-      sub.status = action === 'renew' ? 'active' : 'past_due';
-      sub.items.data[0]!.current_period_end = periodEnd(
-        sub.items.data[0]!.price.id,
-      );
+    let result: Stripe.Event;
+    if (action === 'cancel') result = cancel(sub);
+    else {
+      if (action === 'cancel-at-period-end') sub.cancel_at_period_end = true;
+      else {
+        sub.status = action === 'renew' ? 'active' : 'past_due';
+        sub.items.data[0]!.current_period_end = periodEnd(
+          sub.items.data[0]!.price.id,
+        );
+      }
+      result = event('customer.subscription.updated', sub);
     }
-    const result = event(
-      action === 'cancel'
-        ? 'customer.subscription.deleted'
-        : 'customer.subscription.updated',
-      sub,
-    );
     save();
     return result;
   }
@@ -254,7 +255,10 @@ export async function createStripeDev(
       requests.push({
         method: req.method!,
         path,
-        body: Object.fromEntries(body),
+        // The SDK sends a DELETE's parameters in its query string.
+        body: Object.fromEntries(
+          req.method === 'DELETE' ? url.searchParams : body,
+        ),
         ...(key ? { key } : {}),
       });
       const failure = failures.get(path);
@@ -366,6 +370,16 @@ export async function createStripeDev(
             (s) => s.customer === url.searchParams.get('customer'),
           ),
         };
+      } else if (
+        path.startsWith('/v1/subscriptions/') &&
+        req.method === 'DELETE'
+      ) {
+        const sub = subscriptions.get(path.split('/')[3]!);
+        if (!sub) throw new Error('No such subscription');
+        if (['canceled', 'incomplete_expired'].includes(sub.status))
+          throw new Error('Subscription is already canceled');
+        cancel(sub);
+        result = sub;
       } else if (
         path === '/v1/billing_portal/sessions' &&
         req.method === 'POST'

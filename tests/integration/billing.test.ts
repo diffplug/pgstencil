@@ -1076,3 +1076,103 @@ foundingTest(
     expect(session(monthly.url).status).toBe('open');
   },
 );
+
+billingTest(
+  'end() cancels at once without proration and records its reason, which the deleted webhook reads',
+  async ({ f }) => {
+    const contexts: unknown[] = [];
+    const deliver = async () => {
+      while (f.dev.events.length) {
+        const { body, signature } = f.dev.signed(f.dev.events.shift()!);
+        await f.billing.webhook(
+          body,
+          signature,
+          async (event, _trx, context) => {
+            contexts.push([event.type, context]);
+          },
+        );
+      }
+    };
+    const { session } = await f.start();
+    const sub = f.dev.completeCheckout(session.id);
+    await deliver();
+    expect(contexts).toEqual([
+      ['checkout.session.completed', { ownerId: 'alice', subscription: null }],
+      [
+        'customer.subscription.created',
+        {
+          ownerId: 'alice',
+          subscription: expect.objectContaining({
+            id: sub.id,
+            status: 'trialing',
+            end_reason: null,
+          }),
+        },
+      ],
+    ]);
+    contexts.length = 0;
+    await expect(
+      f.billing.end('mallory', sub.id, { reason: 'refund' }),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      f.billing.end('alice', 'sub_unknown', { reason: 'refund' }),
+    ).rejects.toMatchObject({ status: 404 });
+    for (const reason of ['', 'Refund', 'a'.repeat(41), 'a b'])
+      await expect(f.billing.end('alice', sub.id, { reason })).rejects.toThrow(
+        'end reason',
+      );
+    expect(f.dev.requests.filter((r) => r.method === 'DELETE')).toEqual([]);
+    expect(await f.billing.end('alice', sub.id, { reason: 'refund' })).toBe(
+      true,
+    );
+    expect(f.dev.requests.filter((r) => r.method === 'DELETE')).toEqual([
+      {
+        method: 'DELETE',
+        path: `/v1/subscriptions/${sub.id}`,
+        body: { prorate: 'false', invoice_now: 'false' },
+      },
+    ]);
+    expect(await f.billing.status('alice')).toMatchObject({
+      access: false,
+      subscription: { status: 'canceled', end_reason: 'refund' },
+    });
+    await deliver();
+    expect(contexts).toEqual([
+      [
+        'customer.subscription.deleted',
+        {
+          ownerId: 'alice',
+          subscription: expect.objectContaining({
+            id: sub.id,
+            status: 'canceled',
+            end_reason: 'refund',
+          }),
+        },
+      ],
+    ]);
+    // Ended already: nothing is sent and the first reason stands.
+    expect(await f.billing.end('alice', sub.id, { reason: 'closure' })).toBe(
+      false,
+    );
+    expect(f.dev.requests.filter((r) => r.method === 'DELETE')).toHaveLength(1);
+    expect((await f.billing.status('alice')).subscription?.end_reason).toBe(
+      'refund',
+    );
+    // A subscription pgstencil did not end carries no reason.
+    contexts.length = 0;
+    const bob = await f.start('monthly', 'bob');
+    const bobSub = f.dev.completeCheckout(bob.session.id);
+    f.dev.transition(bobSub.id, 'cancel');
+    await deliver();
+    expect(contexts.at(-1)).toEqual([
+      'customer.subscription.deleted',
+      {
+        ownerId: 'bob',
+        subscription: expect.objectContaining({
+          status: 'canceled',
+          end_reason: null,
+        }),
+      },
+    ]);
+  },
+);

@@ -1176,3 +1176,45 @@ billingTest(
     ]);
   },
 );
+
+billingTest(
+  'owner and customer lookups, dispute owners through their charge, and an already-verified event',
+  async ({ f }) => {
+    expect(await f.billing.customerOf('alice')).toBeNull();
+    const { session } = await f.start();
+    f.dev.completeCheckout(session.id);
+    await f.deliver();
+    const customer = (await f.billing.customerOf('alice'))!;
+    expect(customer).toMatch(/^cus_/);
+    expect(await f.billing.ownerOfCustomer(customer)).toBe('alice');
+    expect(await f.billing.ownerOfCustomer({ id: customer })).toBe('alice');
+    expect(await f.billing.ownerOfCustomer('cus_stranger')).toBeNull();
+    expect(await f.billing.ownerOfCustomer(null)).toBeNull();
+    const ours = f.dev.dispute(customer);
+    f.dev.dispute('cus_stranger');
+    const owners: (string | null)[] = [];
+    const apply = async (
+      _event: unknown,
+      _trx: unknown,
+      context: { ownerId: string | null },
+    ) => {
+      owners.push(context.ownerId);
+    };
+    // Verified once to read it first, then processed without a second check.
+    while (f.dev.events.length) {
+      const { body, signature } = f.dev.signed(f.dev.events.shift()!);
+      const event = await f.billing.verifyWebhook(body, signature);
+      await f.billing.webhook(event, apply);
+    }
+    expect(owners).toEqual(['alice', null]);
+    expect(
+      f.dev.requests.filter((r) => r.path.startsWith('/v1/charges/')),
+    ).toHaveLength(2);
+    // A parsed body was never verified, so it is refused.
+    const parsed = JSON.parse(f.dev.signed(ours).body);
+    await expect(f.billing.webhook(parsed, apply)).rejects.toThrow(
+      'verifyWebhook',
+    );
+    expect(owners).toHaveLength(2);
+  },
+);

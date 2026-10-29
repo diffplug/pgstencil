@@ -37,7 +37,11 @@ export interface BillingConfig<P extends string = string> {
 export type BillingSubscription = Selectable<BillingDB['subscriptions']>;
 /** What `webhook` resolved an event to, read inside its transaction. */
 export interface WebhookContext {
-  /** The billing owner the event names through its `customer`; null for one pgstencil did not create. */
+  /**
+   * The billing owner the event names: through its `customer`, or for a
+   * `charge.dispute.*` event, the disputed charge's customer; null for a
+   * customer pgstencil did not create.
+   */
   ownerId: string | null;
   /**
    * For a `customer.subscription.*` event, that subscription's synchronized
@@ -179,6 +183,8 @@ export class Billing<P extends string = string> {
   private readonly offers: ReadonlyMap<string, PlanPrices>;
   /** Every recognized Price → the plan it grants. */
   private readonly plans: ReadonlyMap<string, P>;
+  /** Events `verifyWebhook` returned, which `webhook` accepts in place of a body. */
+  private readonly verified = new WeakSet<Stripe.Event>();
   constructor(
     db: Kysely<BillingDB>,
     readonly stripe: Stripe,
@@ -610,6 +616,29 @@ export class Billing<P extends string = string> {
       ref: row.ref,
     };
   }
+  /** The owner of Stripe customer `customer`, or null for one pgstencil did not create. */
+  async ownerOfCustomer(
+    customer: string | { id: string } | null,
+    trx: Transaction<BillingDB> | Kysely<BillingDB> = this.db,
+  ): Promise<string | null> {
+    const id = idOf(customer);
+    if (!id) return null;
+    const account = await trx
+      .selectFrom('accounts')
+      .select('owner_id')
+      .where('customer_id', '=', id)
+      .executeTakeFirst();
+    return account?.owner_id ?? null;
+  }
+  /** The Stripe customer ID of `ownerId`, or null before checkout created one. */
+  async customerOf(ownerId: string): Promise<string | null> {
+    const account = await this.db
+      .selectFrom('accounts')
+      .select('customer_id')
+      .where('owner_id', '=', ownerId)
+      .executeTakeFirst();
+    return account?.customer_id ?? null;
+  }
   async portal(ownerId: string): Promise<string> {
     const account = await this.db
       .selectFrom('accounts')
@@ -931,24 +960,46 @@ export class Billing<P extends string = string> {
       event.account
     )
       throw new BillingError('Unexpected Stripe event configuration.', 400);
+    this.verified.add(event);
     return event;
   }
+  /**
+   * Processes a raw signed body, or an event this Billing's `verifyWebhook`
+   * already returned, so an application that reads the event first verifies
+   * it once. `apply`'s database effects join the same commit and retry
+   * boundary.
+   */
   async webhook(
     body: Buffer | string,
     signature: string,
-    /** Application database effects join the same commit and retry boundary. */
     apply?: WebhookApply,
+  ): Promise<void>;
+  async webhook(event: Stripe.Event, apply?: WebhookApply): Promise<void>;
+  async webhook(
+    input: Buffer | string | Stripe.Event,
+    signatureOrApply?: string | WebhookApply,
+    maybeApply?: WebhookApply,
   ): Promise<void> {
     let event: Stripe.Event;
-    try {
-      event = await this.verifyWebhook(body, signature);
-    } catch (error) {
-      diagnostic('billing.webhook.failed', {
-        stage: 'transport',
-        reason: 'request_rejected',
-        ...diagnosticError(error),
-      });
-      throw error;
+    let apply: WebhookApply | undefined;
+    if (typeof input === 'string' || input instanceof Uint8Array) {
+      apply = maybeApply;
+      try {
+        event = await this.verifyWebhook(input, signatureOrApply as string);
+      } catch (error) {
+        diagnostic('billing.webhook.failed', {
+          stage: 'transport',
+          reason: 'request_rejected',
+          ...diagnosticError(error),
+        });
+        throw error;
+      }
+    } else {
+      // Never a parsed body: only what verifyWebhook checked and returned.
+      if (!this.verified.has(input))
+        throw new Error('webhook() takes only an event verifyWebhook returned');
+      event = input;
+      apply = signatureOrApply as WebhookApply | undefined;
     }
     diagnostic('billing.webhook.received', { stripeEventId: event.id });
     try {
@@ -977,17 +1028,18 @@ export class Billing<P extends string = string> {
         const object = event.data.object as {
           customer?: string | { id: string } | null;
         };
-        const customer = idOf(object.customer ?? null);
-        let ownerId: string | null = null;
-        if (customer) {
-          const account = await trx
-            .selectFrom('accounts')
-            .select('owner_id')
-            .where('customer_id', '=', customer)
-            .executeTakeFirst();
-          ownerId = account?.owner_id ?? null;
-          if (ownerId) await this.synchronize(trx, ownerId);
+        let customer = idOf(object.customer ?? null);
+        // A dispute names only its charge, whose customer never changes.
+        if (!customer && event.type.startsWith('charge.dispute.')) {
+          const { charge } = event.data.object as Stripe.Dispute;
+          customer = idOf(
+            typeof charge === 'string'
+              ? (await this.stripe.charges.retrieve(charge)).customer
+              : charge.customer,
+          );
         }
+        const ownerId = await this.ownerOfCustomer(customer, trx);
+        if (ownerId) await this.synchronize(trx, ownerId);
         if (apply) {
           const subscription =
             ownerId && event.type.startsWith('customer.subscription.')

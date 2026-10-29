@@ -995,3 +995,84 @@ billingTest(
     );
   },
 );
+
+foundingTest(
+  'checkout charges only a Price the application expects, and replace gives way to another plan',
+  async ({ f }) => {
+    const session = (url: string) =>
+      [...f.dev.checkouts.values()].find((s) => s.url === url)!;
+    const shown = (price: string) => (priceId: string) => priceId === price;
+    const erin = await f.billing.checkout(
+      'erin',
+      'erin@example.test',
+      'founding',
+      {
+        expectPrice: shown(ladder[0]!),
+      },
+    );
+    expect(erin.priceId).toBe(ladder[0]);
+    // Refused before any Stripe write, for an owner billing never knew.
+    const before = f.dev.requests.length;
+    const refused = await f.billing
+      .checkout('zed', 'zed@example.test', 'founding', {
+        expectPrice: shown(ladder[1]!),
+      })
+      .catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(BillingError);
+    expect(refused).toMatchObject({ status: 409, code: 'unexpected-price' });
+    expect(f.dev.requests.length).toBe(before);
+    // Accepted at first but refused under the owner's lock, as when a
+    // concurrent request changed it: no Checkout Session is created.
+    let calls = 0;
+    await expect(
+      f.billing.checkout('zed', 'zed@example.test', 'founding', {
+        expectPrice: () => calls++ === 0,
+      }),
+    ).rejects.toMatchObject({ code: 'unexpected-price' });
+    expect(calls).toBe(2);
+    expect(
+      f.dev.requests
+        .slice(before)
+        .filter((r) => r.path === '/v1/checkout/sessions'),
+    ).toEqual([]);
+    for (const owner of ['alice', 'bob']) {
+      const { session } = await f.start('founding', owner);
+      f.dev.completeCheckout(session.id);
+    }
+    await f.deliver();
+    expect(await f.billing.offeredPrice('founding')).toBe(ladder[1]);
+    // A plain retry reuses erin's open checkout at the Price it opened with.
+    expect(
+      await f.billing.checkout('erin', 'erin@example.test', 'founding'),
+    ).toEqual(erin);
+    // Shown the next cohort's Price, she is refused, and the stale checkout
+    // gives way, so asking again opens at the Price she was shown.
+    await expect(
+      f.billing.checkout('erin', 'erin@example.test', 'founding', {
+        expectPrice: shown(ladder[1]!),
+      }),
+    ).rejects.toMatchObject({ code: 'unexpected-price' });
+    expect(session(erin.url).status).toBe('expired');
+    const next = await f.billing.checkout(
+      'erin',
+      'erin@example.test',
+      'founding',
+      { expectPrice: shown(ladder[1]!) },
+    );
+    expect(next).toMatchObject({ priceId: ladder[1] });
+    expect(next.id).not.toBe(erin.id);
+    // Another plan is refused while a checkout is open, unless it replaces it.
+    await expect(
+      f.billing.checkout('erin', 'erin@example.test', 'monthly'),
+    ).rejects.toThrow('Cancel the open checkout');
+    const monthly = await f.billing.checkout(
+      'erin',
+      'erin@example.test',
+      'monthly',
+      { replace: true },
+    );
+    expect(monthly.priceId).toBe(f.dev.prices.monthly);
+    expect(session(next.url).status).toBe('expired');
+    expect(session(monthly.url).status).toBe('open');
+  },
+);

@@ -44,14 +44,26 @@ export interface CompletedCheckout {
   /** The `ref` passed to `checkout`, or null. */
   ref: string | null;
 }
+/**
+ * What an application can branch on: `unexpected-price`, a checkout's
+ * `expectPrice` refusing the Price it would charge.
+ */
+export type BillingErrorCode = 'unexpected-price';
 export class BillingError extends Error {
   constructor(
     message: string,
     readonly status = 409,
+    readonly code?: BillingErrorCode,
   ) {
     super(message);
   }
 }
+const unexpectedPrice = () =>
+  new BillingError(
+    'The price changed. Review it and try again.',
+    409,
+    'unexpected-price',
+  );
 const OPEN = ['pending', 'open'];
 /** Subscriptions that never held a purchase, or that Stripe no longer lists. */
 const UNPURCHASED = ['incomplete', 'incomplete_expired', 'missing'];
@@ -316,13 +328,46 @@ export class Billing<P extends string = string> {
        * Checkout keeps the ref it was opened with.
        */
       ref?: string | undefined;
+      /**
+       * Expire an open checkout for another plan, instead of refusing with
+       * BillingError until `cancelCheckout`.
+       */
+      replace?: boolean | undefined;
+      /**
+       * Whether the application accepts charging `priceId`, such as the
+       * Price its page showed: checked against the Price this checkout would
+       * charge, a reused open checkout's included, before any Stripe write
+       * and again under the owner's lock. A refusal throws BillingError with
+       * code `unexpected-price`, and expires a reused open checkout so the
+       * next one starts at the offered Price. May be called more than once.
+       */
+      expectPrice?: ((priceId: string) => boolean) | undefined;
     } = {},
-  ): Promise<{ id: string; url: string }> {
+  ): Promise<{
+    id: string;
+    url: string;
+    /** The Price this checkout charges. */
+    priceId: string;
+  }> {
     const ref = options.ref ?? null;
     if (ref !== null && (typeof ref !== 'string' || !CHECKOUT_REF.test(ref)))
       throw new BillingError('Invalid checkout ref.', 400);
+    const { replace, expectPrice } = options;
     // Resolved before any Stripe write: an unknown plan or a bad offer creates nothing.
     const price = await this.offeredPrice(plan);
+    if (replace || expectPrice) {
+      let open = await this.openCheckout(ownerId);
+      if (open && open.plan !== plan && replace) {
+        await this.cancelCheckout(ownerId);
+        open = undefined;
+      }
+      const reused = open?.plan === plan ? open : undefined;
+      if (expectPrice && !expectPrice(reused?.price_id ?? price)) {
+        // Left open, it would be reused, and refused, until it expires.
+        if (reused) await this.cancelCheckout(ownerId);
+        throw unexpectedPrice();
+      }
+    }
     const customer = await this.customer(ownerId, email);
     await this.reconcile(ownerId);
     let operation = await this.db.transaction().execute(async (trx) => {
@@ -348,13 +393,14 @@ export class Billing<P extends string = string> {
         .where('owner_id', '=', ownerId)
         .where('status', 'in', OPEN)
         .executeTakeFirst();
-      if (existing) {
-        if (existing.plan !== plan)
-          throw new BillingError(
-            'Cancel the open checkout before choosing another plan.',
-          );
-        return existing;
-      }
+      if (existing && existing.plan !== plan)
+        throw new BillingError(
+          'Cancel the open checkout before choosing another plan.',
+        );
+      // Rechecked under the lock: a concurrent request may have changed it.
+      if (expectPrice && !expectPrice(existing?.price_id ?? price))
+        throw unexpectedPrice();
+      if (existing) return existing;
       return trx
         .insertInto('checkouts')
         .values({
@@ -447,15 +493,22 @@ export class Billing<P extends string = string> {
       await this.confirmCheckout(ownerId, operation.id, session);
       throw new BillingError('Checkout is complete. Refresh billing.');
     }
-    return { id: operation.id, url: session.url ?? operation.url! };
+    return {
+      id: operation.id,
+      url: session.url ?? operation.url!,
+      priceId: operation.price_id,
+    };
   }
-  async cancelCheckout(ownerId: string): Promise<void> {
-    const operation = await this.db
+  private openCheckout(ownerId: string) {
+    return this.db
       .selectFrom('checkouts')
       .selectAll()
       .where('owner_id', '=', ownerId)
       .where('status', 'in', OPEN)
       .executeTakeFirst();
+  }
+  async cancelCheckout(ownerId: string): Promise<void> {
+    const operation = await this.openCheckout(ownerId);
     if (!operation) return;
     if (!operation.session_id)
       throw new BillingError('Checkout is still being created. Retry shortly.');

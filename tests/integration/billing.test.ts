@@ -795,6 +795,35 @@ billingTest(
         ]),
       ),
     );
+    // Several windows in one query agree with one window at a time.
+    const windows = [0, 30, 15, 45];
+    const prices = rows.map((row) => row.price_id);
+    const several = await f.billing.purchaseCounts(prices, {
+      refundDays: windows,
+    });
+    expect(several).toEqual(
+      await Promise.all(
+        windows.map((refundDays) =>
+          f.billing.purchaseCounts(prices, { refundDays }),
+        ),
+      ),
+    );
+    for (const [i, refundDays] of windows.entries())
+      expect(several[i]).toEqual(
+        Object.fromEntries(
+          rows.map((row) => [
+            row.price_id,
+            purchaseStanding(row, { refundDays }) === 'purchased' ? 1 : 0,
+          ]),
+        ),
+      );
+    expect(new Set(several.map((c) => JSON.stringify(c))).size).toBe(3);
+    expect(await f.billing.purchaseCounts(prices, { refundDays: [] })).toEqual(
+      [],
+    );
+    await expect(
+      f.billing.purchaseCounts(prices, { refundDays: [30, -1] }),
+    ).rejects.toThrow('refundDays');
     // A webhook's Stripe subscription reads the same way as its synchronized row.
     const { session } = await f.start('monthly', 'bob');
     const sub = f.dev.completeCheckout(session.id);

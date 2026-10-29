@@ -891,47 +891,71 @@ export class Billing<P extends string = string> {
    * Completed purchases per Price, from synchronized rows without network
    * requests: the subscriptions whose `purchaseStanding` is `purchased`.
    * Stripe does not tell pgstencil about refunds: an application that
-   * refunds also cancels immediately, inside the refund window.
+   * refunds also cancels immediately, inside the refund window. Several
+   * `refundDays` count every window in one query, answering one record per
+   * window in the same order.
    */
   async purchaseCounts(
     prices: readonly string[],
     options: { refundDays: number },
-  ): Promise<Record<string, number>> {
-    const { refundDays } = options;
-    checkRefundDays(refundDays);
-    const counts: Record<string, number> = Object.fromEntries(
-      prices.map((price) => [price, 0]),
+  ): Promise<Record<string, number>>;
+  async purchaseCounts(
+    prices: readonly string[],
+    options: { refundDays: readonly number[] },
+  ): Promise<Record<string, number>[]>;
+  async purchaseCounts(
+    prices: readonly string[],
+    options: { refundDays: number | readonly number[] },
+  ): Promise<Record<string, number> | Record<string, number>[]> {
+    const windows =
+      typeof options.refundDays === 'number'
+        ? [options.refundDays]
+        : [...options.refundDays];
+    windows.forEach(checkRefundDays);
+    const counts = windows.map((): Record<string, number> =>
+      Object.fromEntries(prices.map((price) => [price, 0])),
     );
-    if (!prices.length) return counts;
-    const rows = await this.db
-      .selectFrom('subscriptions')
-      .select(['price_id', (eb) => eb.fn.countAll<string>().as('count')])
-      .where('price_id', 'in', prices)
-      .where('status', 'not in', UNPURCHASED)
-      .where((eb) =>
-        eb.or([
-          eb('ended_at', 'is', null),
-          eb.and([
-            eb.or([
-              eb('trial_end', 'is', null),
-              eb('ended_at', '>', eb.ref('trial_end')),
-            ]),
-            eb.or([
-              eb('started_at', 'is', null),
-              eb(
-                'ended_at',
-                '>=',
-                // Hours, not days: a day is 24 hours in every session time zone, as in purchaseStanding.
-                sql<Date>`started_at + make_interval(hours => ${refundDays * 24})`,
-              ),
-            ]),
+    if (prices.length && windows.length) {
+      const rows = await this.db
+        .selectFrom('subscriptions')
+        .select((eb) => [
+          'price_id',
+          ...windows.map((refundDays, i) =>
+            eb.fn
+              .countAll<string>()
+              .filterWhere((eb) =>
+                eb.or([
+                  eb('ended_at', 'is', null),
+                  eb('started_at', 'is', null),
+                  eb(
+                    'ended_at',
+                    '>=',
+                    // Hours, not days: a day is 24 hours in every session time zone, as in purchaseStanding.
+                    sql<Date>`started_at + make_interval(hours => ${refundDays * 24})`,
+                  ),
+                ]),
+              )
+              .as(`count${i}`),
+          ),
+        ])
+        .where('price_id', 'in', prices)
+        .where('status', 'not in', UNPURCHASED)
+        // Never charged: it ended no later than its trial.
+        .where((eb) =>
+          eb.or([
+            eb('ended_at', 'is', null),
+            eb('trial_end', 'is', null),
+            eb('ended_at', '>', eb.ref('trial_end')),
           ]),
-        ]),
-      )
-      .groupBy('price_id')
-      .execute();
-    for (const row of rows) counts[row.price_id] = Number(row.count);
-    return counts;
+        )
+        .groupBy('price_id')
+        .execute();
+      for (const row of rows as unknown as Record<string, string>[])
+        counts.forEach((count, i) => {
+          count[row.price_id!] = Number(row[`count${i}`]);
+        });
+    }
+    return typeof options.refundDays === 'number' ? counts[0]! : counts;
   }
   /** Throws BillingError(400) for anything the sender got wrong. */
   async verifyWebhook(

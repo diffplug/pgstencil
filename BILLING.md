@@ -73,7 +73,7 @@ const prices = {
 
 Each Price belongs to exactly one plan. A subscription on any recognized Price grants its plan, so retiring a Price means moving it off `offer` while keeping it in `recognized`; removing it entirely makes synchronization of its subscriptions fail closed. `offeredPrice(plan)` returns what a checkout started now would charge, for display. `checkout` resolves the offer before any Stripe write and stores it on the operation: a repeated or concurrent request reuses the open Checkout at the Price it opened with, even after the offer moves on. Concurrent buyers can therefore exceed a cohort by the number of Checkouts open when it fills.
 
-`purchaseCounts(prices, { refundDays })` counts completed purchases per Price from synchronized rows, without network requests; every requested Price appears, with 0 when unsold. A subscription counts unless:
+`purchaseCounts(prices, { refundDays })` counts completed purchases per Price from synchronized rows, without network requests; every requested Price appears, with 0 when unsold. Given an array, such as `{ refundDays: [0, 30] }` for gross and net, it counts every window in one query and returns one record per window, in the same order. A subscription counts unless:
 
 - its status is `incomplete` or `incomplete_expired` (Stripe never completed the first payment) or `missing` (Stripe no longer lists it);
 - it ended no later than its trial end, so it was never charged; or

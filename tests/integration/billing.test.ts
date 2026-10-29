@@ -1207,6 +1207,55 @@ billingTest(
 );
 
 billingTest(
+  'a deleted webhook racing end() waits on the owner lock and reads its reason',
+  async ({ f }) => {
+    const { session } = await f.start();
+    const sub = f.dev.completeCheckout(session.id);
+    await f.deliver();
+    const subscriptions = f.dev.stripe.subscriptions;
+    const cancel = subscriptions.cancel;
+    let webhook: Promise<unknown> | undefined;
+    const seen: (string | null | undefined)[] = [];
+    // Deliver the deleted event the moment Stripe sends it, while end() still
+    // holds the owner lock, and hand back only once the webhook is waiting on it.
+    subscriptions.cancel = (async (...args: Parameters<typeof cancel>) => {
+      const result = await cancel.apply(subscriptions, args);
+      const event = f.dev.events.shift()!;
+      expect(event.type).toBe('customer.subscription.deleted');
+      const { body, signature } = f.dev.signed(event);
+      webhook = f.billing.webhook(
+        body,
+        signature,
+        async (_e, _trx, context) => {
+          seen.push(context.subscription?.end_reason);
+        },
+      );
+      for (let tries = 0; ; tries++) {
+        const [waiting] = await queryDatabase<{ count: number }>(
+          f.database.url,
+          `select count(*)::int as count from pg_stat_activity
+           where datname = current_database() and wait_event_type = 'Lock'`,
+        );
+        if (waiting!.count > 0) break;
+        if (tries > 500)
+          throw new Error('the webhook never waited on the lock');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return result;
+    }) as typeof cancel;
+    try {
+      expect(await f.billing.end('alice', sub.id, { reason: 'refund' })).toBe(
+        true,
+      );
+    } finally {
+      subscriptions.cancel = cancel;
+    }
+    await webhook;
+    expect(seen).toEqual(['refund']);
+  },
+);
+
+billingTest(
   'owner and customer lookups, dispute owners through their charge, and an already-verified event',
   async ({ f }) => {
     expect(await f.billing.customerOf('alice')).toBeNull();

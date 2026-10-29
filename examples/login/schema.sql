@@ -95,8 +95,36 @@ CREATE TABLE pgstencil_billing.subscriptions (
     cancel_at_period_end boolean NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     started_at timestamp with time zone,
-    ended_at timestamp with time zone
+    ended_at timestamp with time zone,
+    end_reason text,
+    CONSTRAINT subscriptions_end_reason_check CHECK ((end_reason ~ '^[a-z0-9:-]{1,40}$'::text))
 );
+
+
+--
+-- Name: owner_access; Type: VIEW; Schema: pgstencil_billing; Owner: -
+--
+
+CREATE VIEW pgstencil_billing.owner_access AS
+ SELECT owner_id,
+    id AS subscription_id,
+    price_id,
+    status,
+        CASE status
+            WHEN 'active'::text THEN period_end
+            WHEN 'trialing'::text THEN trial_end
+            ELSE NULL::timestamp with time zone
+        END AS access_until
+   FROM ( SELECT subscriptions.id,
+            subscriptions.owner_id,
+            subscriptions.price_id,
+            subscriptions.status,
+            subscriptions.period_end,
+            subscriptions.trial_end,
+            count(*) OVER (PARTITION BY subscriptions.owner_id) AS current
+           FROM pgstencil_billing.subscriptions
+          WHERE (subscriptions.status = ANY (ARRAY['trialing'::text, 'active'::text, 'past_due'::text, 'unpaid'::text, 'paused'::text, 'incomplete'::text]))) held
+  WHERE (current = 1);
 
 
 --

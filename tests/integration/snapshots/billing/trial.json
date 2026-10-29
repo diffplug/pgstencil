@@ -4,6 +4,7 @@
   "plan": "monthly",
   "subscription": {
     "cancel_at_period_end": false,
+    "end_reason": null,
     "ended_at": null,
     "id": "sub_A7y8nHdEPUsUwvMg",
     "owner_id": "alice",

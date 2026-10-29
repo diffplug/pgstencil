@@ -30,6 +30,7 @@ export async function createStripeDev(
   const customers = new Map<string, Record<string, unknown>>();
   const checkouts = new Map<string, Stripe.Checkout.Session>();
   const subscriptions = new Map<string, Stripe.Subscription>();
+  const charges = new Map<string, Stripe.Charge>();
   const parameters = new Map<string, URLSearchParams>();
   const idempotency = new Map<string, { input: string; result: unknown }>();
   const requests: {
@@ -46,6 +47,7 @@ export async function createStripeDev(
     for (const [key, value] of state.checkouts) checkouts.set(key, value);
     for (const [key, value] of state.subscriptions)
       subscriptions.set(key, value);
+    for (const [key, value] of state.charges ?? []) charges.set(key, value);
     for (const [key, value] of state.parameters)
       parameters.set(key, new URLSearchParams(value));
     for (const [key, value] of state.idempotency) idempotency.set(key, value);
@@ -58,6 +60,7 @@ export async function createStripeDev(
       customers: [...customers],
       checkouts: [...checkouts],
       subscriptions: [...subscriptions],
+      charges: [...charges],
       parameters: [...parameters].map(([k, v]) => [k, v.toString()]),
       idempotency: [...idempotency],
       events,
@@ -169,30 +172,57 @@ export async function createStripeDev(
     save();
     return session;
   }
+  /**
+   * A charge to `customer` and a dispute of it, emitting
+   * `charge.dispute.created`. Its object names only the charge, as Stripe's
+   * does; `charges.retrieve` reads the customer.
+   */
+  function dispute(
+    customer: string,
+    status: Stripe.Dispute.Status = 'needs_response',
+  ) {
+    const charge = {
+      id: id('ch'),
+      object: 'charge',
+      customer,
+      livemode: false,
+    } as Stripe.Charge;
+    charges.set(charge.id, charge);
+    const result = event('charge.dispute.created', {
+      id: id('dp'),
+      object: 'dispute',
+      charge: charge.id,
+      status,
+      livemode: false,
+    });
+    save();
+    return result;
+  }
+  /** An immediate cancellation, as `subscriptions.cancel` or a refund makes. */
+  function cancel(sub: Stripe.Subscription) {
+    sub.status = 'canceled';
+    sub.canceled_at = seconds();
+    sub.ended_at = seconds();
+    return event('customer.subscription.deleted', sub);
+  }
   function transition(
     subscriptionId: string,
     action: 'renew' | 'payment-failed' | 'cancel' | 'cancel-at-period-end',
   ) {
     const sub = subscriptions.get(subscriptionId);
     if (!sub) throw new Error('Subscription not found');
-    if (action === 'cancel-at-period-end') sub.cancel_at_period_end = true;
-    else if (action === 'cancel') {
-      // An immediate cancellation, as when an application refunds.
-      sub.status = 'canceled';
-      sub.canceled_at = seconds();
-      sub.ended_at = seconds();
-    } else {
-      sub.status = action === 'renew' ? 'active' : 'past_due';
-      sub.items.data[0]!.current_period_end = periodEnd(
-        sub.items.data[0]!.price.id,
-      );
+    let result: Stripe.Event;
+    if (action === 'cancel') result = cancel(sub);
+    else {
+      if (action === 'cancel-at-period-end') sub.cancel_at_period_end = true;
+      else {
+        sub.status = action === 'renew' ? 'active' : 'past_due';
+        sub.items.data[0]!.current_period_end = periodEnd(
+          sub.items.data[0]!.price.id,
+        );
+      }
+      result = event('customer.subscription.updated', sub);
     }
-    const result = event(
-      action === 'cancel'
-        ? 'customer.subscription.deleted'
-        : 'customer.subscription.updated',
-      sub,
-    );
     save();
     return result;
   }
@@ -254,7 +284,10 @@ export async function createStripeDev(
       requests.push({
         method: req.method!,
         path,
-        body: Object.fromEntries(body),
+        // The SDK sends a DELETE's parameters in its query string.
+        body: Object.fromEntries(
+          req.method === 'DELETE' ? url.searchParams : body,
+        ),
         ...(key ? { key } : {}),
       });
       const failure = failures.get(path);
@@ -366,6 +399,20 @@ export async function createStripeDev(
             (s) => s.customer === url.searchParams.get('customer'),
           ),
         };
+      } else if (path.startsWith('/v1/charges/') && req.method === 'GET') {
+        const charge = charges.get(path.split('/')[3]!);
+        if (!charge) throw new Error('No such charge');
+        result = charge;
+      } else if (
+        path.startsWith('/v1/subscriptions/') &&
+        req.method === 'DELETE'
+      ) {
+        const sub = subscriptions.get(path.split('/')[3]!);
+        if (!sub) throw new Error('No such subscription');
+        if (['canceled', 'incomplete_expired'].includes(sub.status))
+          throw new Error('Subscription is already canceled');
+        cancel(sub);
+        result = sub;
       } else if (
         path === '/v1/billing_portal/sessions' &&
         req.method === 'POST'
@@ -465,6 +512,7 @@ export async function createStripeDev(
     completeCheckout,
     completePayment,
     transition,
+    dispute,
     signed,
     deliver,
     setWebhookTarget(target: string) {

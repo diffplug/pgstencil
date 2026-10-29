@@ -10,6 +10,7 @@ import {
   BillingError,
   purchaseStanding,
   STRIPE_API_VERSION,
+  SUBSCRIBED,
   type BillingConfig,
   type BillingDB,
 } from '../../packages/stripe/src/index.ts';
@@ -19,6 +20,10 @@ import {
   type StripeDevOptions,
 } from '../../packages/stripe/src/testing.ts';
 import { stableJson } from '../../packages/pgstencil/src/snapshots.ts';
+import {
+  queryDatabase,
+  withClient,
+} from '../../packages/pgstencil/src/postgres.ts';
 
 async function fixture(
   options: {
@@ -790,6 +795,35 @@ billingTest(
         ]),
       ),
     );
+    // Several windows in one query agree with one window at a time.
+    const windows = [0, 30, 15, 45];
+    const prices = rows.map((row) => row.price_id);
+    const several = await f.billing.purchaseCounts(prices, {
+      refundDays: windows,
+    });
+    expect(several).toEqual(
+      await Promise.all(
+        windows.map((refundDays) =>
+          f.billing.purchaseCounts(prices, { refundDays }),
+        ),
+      ),
+    );
+    for (const [i, refundDays] of windows.entries())
+      expect(several[i]).toEqual(
+        Object.fromEntries(
+          rows.map((row) => [
+            row.price_id,
+            purchaseStanding(row, { refundDays }) === 'purchased' ? 1 : 0,
+          ]),
+        ),
+      );
+    expect(new Set(several.map((c) => JSON.stringify(c))).size).toBe(3);
+    expect(await f.billing.purchaseCounts(prices, { refundDays: [] })).toEqual(
+      [],
+    );
+    await expect(
+      f.billing.purchaseCounts(prices, { refundDays: [30, -1] }),
+    ).rejects.toThrow('refundDays');
     // A webhook's Stripe subscription reads the same way as its synchronized row.
     const { session } = await f.start('monthly', 'bob');
     const sub = f.dev.completeCheckout(session.id);
@@ -806,5 +840,459 @@ billingTest(
     expect(() => purchaseStanding(row, { refundDays: 1.5 })).toThrow(
       'refundDays',
     );
+  },
+);
+
+billingTest(
+  'owner_access is the access rule status() applies, for application SQL under a read-only grant',
+  async ({ f }) => {
+    expect(SUBSCRIBED).toEqual([
+      'trialing',
+      'active',
+      'past_due',
+      'unpaid',
+      'paused',
+      'incomplete',
+    ]);
+    const statuses = [
+      ...SUBSCRIBED,
+      'canceled',
+      'incomplete_expired',
+      'missing',
+    ];
+    const day = 86_400_000;
+    const at = (days: number) => new Date(f.time.now().getTime() + days * day);
+    const row = (
+      id: string,
+      owner: string,
+      status: string,
+      period: number,
+      trial: number | null,
+    ) => ({
+      id,
+      owner_id: owner,
+      price_id: f.dev.prices.monthly,
+      status,
+      started_at: at(-1),
+      ended_at: null,
+      period_end: at(period),
+      trial_end: trial === null ? null : at(trial),
+      cancel_at_period_end: false,
+      updated_at: at(0),
+    });
+    // Alone, each status with its period and trial ending before, at and
+    // after the clock; beside a valid `active` one, each other status.
+    const expected = new Map<string, boolean>();
+    const rows = [];
+    for (const status of statuses) {
+      for (const [name, period, trial] of [
+        ['past', -1, -1],
+        ['now', 0, 0],
+        ['period', 1, -1],
+        ['trial', -1, 1],
+        ['both', 1, 1],
+        ['notrial', 1, null],
+      ] as const) {
+        const owner = `${status}-${name}`;
+        rows.push(row(`sub_${owner}`, owner, status, period, trial));
+        expected.set(
+          owner,
+          (status === 'active' && period > 0) ||
+            (status === 'trialing' && trial !== null && trial > 0),
+        );
+      }
+      const owner = `pair-${status}`;
+      rows.push(row(`sub_${owner}_a`, owner, 'active', 1, null));
+      rows.push(row(`sub_${owner}_b`, owner, status, 1, 1));
+      expected.set(owner, !SUBSCRIBED.includes(status));
+    }
+    await f.billing.db
+      .insertInto('accounts')
+      .values(
+        [...expected.keys()].map((owner) => ({
+          owner_id: owner,
+          email: null,
+          created_at: at(0),
+        })),
+      )
+      .execute();
+    await f.billing.db.insertInto('subscriptions').values(rows).execute();
+    const reader = `SELECT owner_id AS owner FROM pgstencil_billing.owner_access
+      WHERE access_until > $1`;
+    const granted = new Set(
+      (
+        await queryDatabase<{ owner: string }>(f.database.url, reader, [
+          f.time.now(),
+        ])
+      ).map((r) => r.owner),
+    );
+    for (const [owner, access] of expected) {
+      expect([owner, (await f.billing.status(owner)).access]).toEqual([
+        owner,
+        access,
+      ]);
+      expect([owner, granted.has(owner)]).toEqual([owner, access]);
+    }
+    expect(granted.size).toBeGreaterThan(3);
+    // A role granted only the view reads it, never the table beneath it.
+    // Roles are cluster-wide, so this one lives only inside a transaction.
+    const role = `pgstencil_reader_${f.random.bytes(6).toString('hex')}`;
+    await withClient(f.database.url, async (client) => {
+      await client.query('BEGIN');
+      try {
+        await client.query(`CREATE ROLE ${role}`);
+        await client.query(
+          `GRANT USAGE ON SCHEMA pgstencil_billing TO ${role}`,
+        );
+        await client.query(
+          `GRANT SELECT ON pgstencil_billing.owner_access TO ${role}`,
+        );
+        await client.query(`SET LOCAL ROLE ${role}`);
+        const read = await client.query(reader, [f.time.now()]);
+        expect(read.rows.length).toBe(granted.size);
+        await expect(
+          client.query('SELECT 1 FROM pgstencil_billing.subscriptions'),
+        ).rejects.toThrow('permission denied');
+      } finally {
+        await client.query('ROLLBACK');
+      }
+    });
+  },
+);
+
+billingTest(
+  'reconcileStale repairs a bounded batch of owners whose renewal webhook went missing',
+  async ({ f }) => {
+    const subs: Record<string, string> = {};
+    for (const owner of ['alice', 'bob', 'carol']) {
+      const { session } = await f.start('monthly', owner);
+      subs[owner] = f.dev.completeCheckout(session.id).id;
+    }
+    await f.deliver();
+    f.time.advanceDays(15);
+    const dave = await f.start('monthly', 'dave');
+    f.dev.completeCheckout(dave.session.id);
+    await f.deliver();
+    // Stripe converts two trials, but their webhooks never arrive; carol's
+    // has not been moved on yet.
+    f.dev.transition(subs.alice!, 'renew');
+    f.dev.transition(subs.bob!, 'renew');
+    f.dev.events.length = 0;
+    const access = async () =>
+      Object.fromEntries(
+        await Promise.all(
+          ['alice', 'bob', 'carol', 'dave'].map(async (owner) => [
+            owner,
+            (await f.billing.status(owner)).access,
+          ]),
+        ),
+      );
+    expect(await access()).toEqual({
+      alice: false,
+      bob: false,
+      carol: false,
+      dave: true,
+    });
+    const first = await f.billing.reconcileStale({ limit: 2 });
+    expect(first.failed).toEqual([]);
+    expect(first.reconciled).toHaveLength(2);
+    expect(
+      first.reconciled.every((owner) =>
+        ['alice', 'bob', 'carol'].includes(owner),
+      ),
+    ).toBe(true);
+    f.dev.failNext('/v1/subscriptions');
+    const second = await f.billing.reconcileStale({ limit: 10 });
+    // The remaining stale owners: carol, and whichever of alice and bob waited.
+    expect(second.reconciled.length + second.failed.length).toBe(
+      first.reconciled.includes('carol') ? 2 : 1,
+    );
+    expect(second.failed).toHaveLength(1);
+    await f.billing.reconcileStale({ limit: 10 });
+    expect(await access()).toEqual({
+      alice: true,
+      bob: true,
+      carol: false,
+      dave: true,
+    });
+    // Only carol, whose trial Stripe has not converted, is still stale.
+    expect((await f.billing.reconcileStale({ limit: 10 })).reconciled).toEqual([
+      'carol',
+    ]);
+    await expect(f.billing.reconcileStale({ limit: 0 })).rejects.toThrow(
+      'limit',
+    );
+  },
+);
+
+foundingTest(
+  'checkout charges only a Price the application expects, and replace gives way to another plan',
+  async ({ f }) => {
+    const session = (url: string) =>
+      [...f.dev.checkouts.values()].find((s) => s.url === url)!;
+    const shown = (price: string) => (priceId: string) => priceId === price;
+    const erin = await f.billing.checkout(
+      'erin',
+      'erin@example.test',
+      'founding',
+      {
+        expectPrice: shown(ladder[0]!),
+      },
+    );
+    expect(erin.priceId).toBe(ladder[0]);
+    // Refused before any Stripe write, for an owner billing never knew.
+    const before = f.dev.requests.length;
+    const refused = await f.billing
+      .checkout('zed', 'zed@example.test', 'founding', {
+        expectPrice: shown(ladder[1]!),
+      })
+      .catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(BillingError);
+    expect(refused).toMatchObject({ status: 409, code: 'unexpected-price' });
+    expect(f.dev.requests.length).toBe(before);
+    // Accepted at first but refused under the owner's lock, as when a
+    // concurrent request changed it: no Checkout Session is created.
+    let calls = 0;
+    await expect(
+      f.billing.checkout('zed', 'zed@example.test', 'founding', {
+        expectPrice: () => calls++ === 0,
+      }),
+    ).rejects.toMatchObject({ code: 'unexpected-price' });
+    expect(calls).toBe(2);
+    expect(
+      f.dev.requests
+        .slice(before)
+        .filter((r) => r.path === '/v1/checkout/sessions'),
+    ).toEqual([]);
+    for (const owner of ['alice', 'bob']) {
+      const { session } = await f.start('founding', owner);
+      f.dev.completeCheckout(session.id);
+    }
+    await f.deliver();
+    expect(await f.billing.offeredPrice('founding')).toBe(ladder[1]);
+    // A plain retry reuses erin's open checkout at the Price it opened with.
+    expect(
+      await f.billing.checkout('erin', 'erin@example.test', 'founding'),
+    ).toEqual(erin);
+    // Shown the next cohort's Price, she is refused, and the stale checkout
+    // gives way, so asking again opens at the Price she was shown.
+    await expect(
+      f.billing.checkout('erin', 'erin@example.test', 'founding', {
+        expectPrice: shown(ladder[1]!),
+      }),
+    ).rejects.toMatchObject({ code: 'unexpected-price' });
+    expect(session(erin.url).status).toBe('expired');
+    const next = await f.billing.checkout(
+      'erin',
+      'erin@example.test',
+      'founding',
+      { expectPrice: shown(ladder[1]!) },
+    );
+    expect(next).toMatchObject({ priceId: ladder[1] });
+    expect(next.id).not.toBe(erin.id);
+    // Another plan is refused while a checkout is open, unless it replaces it.
+    await expect(
+      f.billing.checkout('erin', 'erin@example.test', 'monthly'),
+    ).rejects.toThrow('Cancel the open checkout');
+    const monthly = await f.billing.checkout(
+      'erin',
+      'erin@example.test',
+      'monthly',
+      { replace: true },
+    );
+    expect(monthly.priceId).toBe(f.dev.prices.monthly);
+    expect(session(next.url).status).toBe('expired');
+    expect(session(monthly.url).status).toBe('open');
+  },
+);
+
+billingTest(
+  'end() cancels at once without proration and records its reason, which the deleted webhook reads',
+  async ({ f }) => {
+    const contexts: unknown[] = [];
+    const deliver = async () => {
+      while (f.dev.events.length) {
+        const { body, signature } = f.dev.signed(f.dev.events.shift()!);
+        await f.billing.webhook(
+          body,
+          signature,
+          async (event, _trx, context) => {
+            contexts.push([event.type, context]);
+          },
+        );
+      }
+    };
+    const { session } = await f.start();
+    const sub = f.dev.completeCheckout(session.id);
+    await deliver();
+    expect(contexts).toEqual([
+      ['checkout.session.completed', { ownerId: 'alice', subscription: null }],
+      [
+        'customer.subscription.created',
+        {
+          ownerId: 'alice',
+          subscription: expect.objectContaining({
+            id: sub.id,
+            status: 'trialing',
+            end_reason: null,
+          }),
+        },
+      ],
+    ]);
+    contexts.length = 0;
+    await expect(
+      f.billing.end('mallory', sub.id, { reason: 'refund' }),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      f.billing.end('alice', 'sub_unknown', { reason: 'refund' }),
+    ).rejects.toMatchObject({ status: 404 });
+    for (const reason of ['', 'Refund', 'a'.repeat(41), 'a b'])
+      await expect(f.billing.end('alice', sub.id, { reason })).rejects.toThrow(
+        'end reason',
+      );
+    expect(f.dev.requests.filter((r) => r.method === 'DELETE')).toEqual([]);
+    expect(await f.billing.end('alice', sub.id, { reason: 'refund' })).toBe(
+      true,
+    );
+    expect(f.dev.requests.filter((r) => r.method === 'DELETE')).toEqual([
+      {
+        method: 'DELETE',
+        path: `/v1/subscriptions/${sub.id}`,
+        body: { prorate: 'false', invoice_now: 'false' },
+      },
+    ]);
+    expect(await f.billing.status('alice')).toMatchObject({
+      access: false,
+      subscription: { status: 'canceled', end_reason: 'refund' },
+    });
+    await deliver();
+    expect(contexts).toEqual([
+      [
+        'customer.subscription.deleted',
+        {
+          ownerId: 'alice',
+          subscription: expect.objectContaining({
+            id: sub.id,
+            status: 'canceled',
+            end_reason: 'refund',
+          }),
+        },
+      ],
+    ]);
+    // Ended already: nothing is sent and the first reason stands.
+    expect(await f.billing.end('alice', sub.id, { reason: 'closure' })).toBe(
+      false,
+    );
+    expect(f.dev.requests.filter((r) => r.method === 'DELETE')).toHaveLength(1);
+    expect((await f.billing.status('alice')).subscription?.end_reason).toBe(
+      'refund',
+    );
+    // A subscription pgstencil did not end carries no reason.
+    contexts.length = 0;
+    const bob = await f.start('monthly', 'bob');
+    const bobSub = f.dev.completeCheckout(bob.session.id);
+    f.dev.transition(bobSub.id, 'cancel');
+    await deliver();
+    expect(contexts.at(-1)).toEqual([
+      'customer.subscription.deleted',
+      {
+        ownerId: 'bob',
+        subscription: expect.objectContaining({
+          status: 'canceled',
+          end_reason: null,
+        }),
+      },
+    ]);
+  },
+);
+
+billingTest(
+  'a deleted webhook racing end() waits on the owner lock and reads its reason',
+  async ({ f }) => {
+    const { session } = await f.start();
+    const sub = f.dev.completeCheckout(session.id);
+    await f.deliver();
+    const subscriptions = f.dev.stripe.subscriptions;
+    const cancel = subscriptions.cancel;
+    let webhook: Promise<unknown> | undefined;
+    const seen: (string | null | undefined)[] = [];
+    // Deliver the deleted event the moment Stripe sends it, while end() still
+    // holds the owner lock, and hand back only once the webhook is waiting on it.
+    subscriptions.cancel = (async (...args: Parameters<typeof cancel>) => {
+      const result = await cancel.apply(subscriptions, args);
+      const event = f.dev.events.shift()!;
+      expect(event.type).toBe('customer.subscription.deleted');
+      const { body, signature } = f.dev.signed(event);
+      webhook = f.billing.webhook(
+        body,
+        signature,
+        async (_e, _trx, context) => {
+          seen.push(context.subscription?.end_reason);
+        },
+      );
+      for (let tries = 0; ; tries++) {
+        const [waiting] = await queryDatabase<{ count: number }>(
+          f.database.url,
+          `select count(*)::int as count from pg_stat_activity
+           where datname = current_database() and wait_event_type = 'Lock'`,
+        );
+        if (waiting!.count > 0) break;
+        if (tries > 500)
+          throw new Error('the webhook never waited on the lock');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return result;
+    }) as typeof cancel;
+    try {
+      expect(await f.billing.end('alice', sub.id, { reason: 'refund' })).toBe(
+        true,
+      );
+    } finally {
+      subscriptions.cancel = cancel;
+    }
+    await webhook;
+    expect(seen).toEqual(['refund']);
+  },
+);
+
+billingTest(
+  'owner and customer lookups, dispute owners through their charge, and an already-verified event',
+  async ({ f }) => {
+    expect(await f.billing.customerOf('alice')).toBeNull();
+    const { session } = await f.start();
+    f.dev.completeCheckout(session.id);
+    await f.deliver();
+    const customer = (await f.billing.customerOf('alice'))!;
+    expect(customer).toMatch(/^cus_/);
+    expect(await f.billing.ownerOfCustomer(customer)).toBe('alice');
+    expect(await f.billing.ownerOfCustomer({ id: customer })).toBe('alice');
+    expect(await f.billing.ownerOfCustomer('cus_stranger')).toBeNull();
+    expect(await f.billing.ownerOfCustomer(null)).toBeNull();
+    const ours = f.dev.dispute(customer);
+    f.dev.dispute('cus_stranger');
+    const owners: (string | null)[] = [];
+    const apply = async (
+      _event: unknown,
+      _trx: unknown,
+      context: { ownerId: string | null },
+    ) => {
+      owners.push(context.ownerId);
+    };
+    // Verified once to read it first, then processed without a second check.
+    while (f.dev.events.length) {
+      const { body, signature } = f.dev.signed(f.dev.events.shift()!);
+      const event = await f.billing.verifyWebhook(body, signature);
+      await f.billing.webhook(event, apply);
+    }
+    expect(owners).toEqual(['alice', null]);
+    expect(
+      f.dev.requests.filter((r) => r.path.startsWith('/v1/charges/')),
+    ).toHaveLength(2);
+    // A parsed body was never verified, so it is refused.
+    const parsed = JSON.parse(f.dev.signed(ours).body);
+    await expect(f.billing.webhook(parsed, apply)).rejects.toThrow(
+      'verifyWebhook',
+    );
+    expect(owners).toHaveLength(2);
   },
 );

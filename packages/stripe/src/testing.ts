@@ -125,6 +125,7 @@ export async function createStripeDev(
       ended_at: null,
       canceled_at: null,
       trial_end: days ? seconds() + days * 86400 : null,
+      cancel_at: null,
       cancel_at_period_end: false,
       metadata: Object.fromEntries(
         [...p]
@@ -207,7 +208,12 @@ export async function createStripeDev(
   }
   function transition(
     subscriptionId: string,
-    action: 'renew' | 'payment-failed' | 'cancel' | 'cancel-at-period-end',
+    action:
+      | 'renew'
+      | 'payment-failed'
+      | 'cancel'
+      | 'cancel-at-period-end'
+      | 'portal-cancel',
   ) {
     const sub = subscriptions.get(subscriptionId);
     if (!sub) throw new Error('Subscription not found');
@@ -215,6 +221,8 @@ export async function createStripeDev(
     if (action === 'cancel') result = cancel(sub);
     else {
       if (action === 'cancel-at-period-end') sub.cancel_at_period_end = true;
+      else if (action === 'portal-cancel')
+        sub.cancel_at = sub.items.data[0]!.current_period_end;
       else {
         sub.status = action === 'renew' ? 'active' : 'past_due';
         sub.items.data[0]!.current_period_end = periodEnd(

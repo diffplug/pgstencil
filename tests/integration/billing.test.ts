@@ -204,6 +204,26 @@ billingTest(
 );
 
 billingTest(
+  'a period-end cancellation from the customer portal reads as not renewing',
+  async ({ f }) => {
+    const { session } = await f.start('monthly');
+    const sub = f.dev.completeCheckout(session.id);
+    await f.deliver();
+    const row = () =>
+      f.billing.db
+        .selectFrom('subscriptions')
+        .select('cancel_at_period_end')
+        .where('id', '=', sub.id)
+        .executeTakeFirstOrThrow();
+    expect((await row()).cancel_at_period_end).toBe(false);
+    f.dev.transition(sub.id, 'portal-cancel');
+    await f.deliver();
+    expect((await row()).cancel_at_period_end).toBe(true);
+    expect((await f.billing.status('alice')).access).toBe(true);
+  },
+);
+
+billingTest(
   'yearly discount uses the configured price; canceled accounts cannot repeat a trial',
   async ({ f }) => {
     const { session } = await f.start('yearly');

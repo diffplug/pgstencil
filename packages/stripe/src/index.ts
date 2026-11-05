@@ -699,7 +699,11 @@ export class Billing<P extends string = string> {
         ended_at: sub.ended_at === null ? null : instant(sub.ended_at),
         period_end: instant(item.current_period_end),
         trial_end: sub.trial_end === null ? null : instant(sub.trial_end),
-        cancel_at_period_end: sub.cancel_at_period_end,
+        // The customer portal schedules its period-end cancellation through
+        // `cancel_at`, leaving `cancel_at_period_end` false.
+        cancel_at_period_end:
+          sub.cancel_at_period_end ||
+          (sub.cancel_at !== null && sub.cancel_at <= item.current_period_end),
         updated_at: now,
       };
     });

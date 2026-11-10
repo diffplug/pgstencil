@@ -62,6 +62,20 @@
       "separateMajorMinor": false
     },
     {
+      "description": "Review the Workers CLI and the runtime used directly by integration tests together",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["wrangler", "miniflare"],
+      "groupName": "cloudflare-workers",
+      "groupSlug": "cloudflare-workers"
+    },
+    {
+      "description": "Stable Wrangler uses Miniflare 5 prereleases; allow its dated alpha/beta versions to advance beyond npm's stable channel",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["miniflare"],
+      "ignoreUnstable": false,
+      "respectLatest": false
+    },
+    {
       "matchManagers": ["npm"],
       "matchUpdateTypes": ["patch"],
       "minimumReleaseAge": "1 day"

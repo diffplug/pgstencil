@@ -4,7 +4,11 @@ The three packages (`pgstencil`, `@pgstencil/auth`, `@pgstencil/stripe`) share o
 
 ## Unreleased
 
-These changes are breaking, so they release as 0.5.0.
+Nothing yet.
+
+## 0.5.0 (2026-11-10)
+
+This release is breaking.
 
 ### Removed: the original code/link authentication
 

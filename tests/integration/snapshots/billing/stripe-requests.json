@@ -10,6 +10,7 @@
   },
   {
     "body": {
+      "allowed_payment_method_types[0]": "card",
       "cancel_url": "<origin>/billing",
       "client_reference_id": "Va8eN8Q3_3xqMF9Im1yUvg",
       "customer": "cus_coH1oXmUHUAvwrZs",
@@ -19,7 +20,6 @@
       "metadata[pgstencil_operation]": "nh6LvhIPrrm-MNZdruKyJF6UKMs6w2sRh2V87wsKWt8",
       "mode": "subscription",
       "payment_method_collection": "always",
-      "payment_method_types[0]": "card",
       "subscription_data[metadata][pgstencil_operation]": "nh6LvhIPrrm-MNZdruKyJF6UKMs6w2sRh2V87wsKWt8",
       "subscription_data[metadata][pgstencil_owner]": "Va8eN8Q3_3xqMF9Im1yUvg",
       "subscription_data[trial_period_days]": "14",

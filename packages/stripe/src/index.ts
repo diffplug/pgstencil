@@ -458,7 +458,8 @@ export class Billing<P extends string = string> {
           client_reference_id: ownerId,
           line_items: [{ price: operation.price_id, quantity: 1 }],
           payment_method_collection: 'always',
-          payment_method_types: ['card'],
+          // Filters the account's dynamically eligible methods down to cards.
+          allowed_payment_method_types: ['card'],
           ...(this.config.managedPayments
             ? { managed_payments: { enabled: true } }
             : {}),

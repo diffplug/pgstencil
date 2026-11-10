@@ -178,7 +178,7 @@ billingTest(
     )!;
     expect(creation.body).toMatchObject({
       payment_method_collection: 'always',
-      'payment_method_types[0]': 'card',
+      'allowed_payment_method_types[0]': 'card',
       'subscription_data[trial_period_days]': '14',
     });
     const sub = f.dev.completeCheckout(session.id);

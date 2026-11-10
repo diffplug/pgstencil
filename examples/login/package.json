@@ -10,7 +10,7 @@
     "pgstencil": "workspace:*",
     "@pgstencil/auth": "workspace:*",
     "hono": "^4.13.7",
-    "stripe": "^22.6.1"
+    "stripe": "^23.1.0"
   },
   "devDependencies": {
     "node-pg-migrate": "^9.0.0",

@@ -279,6 +279,44 @@ billingTest(
 );
 
 billingTest(
+  'a paused subscription grants nothing and blocks another checkout; resuming restores access',
+  async ({ f }) => {
+    const { session } = await f.start();
+    const sub = f.dev.completeCheckout(session.id);
+    await f.deliver();
+    f.time.advanceDays(14);
+    f.dev.transition(sub.id, 'renew');
+    await f.deliver();
+    expect((await f.billing.status('alice')).access).toBe(true);
+    const paused = f.dev.transition(sub.id, 'pause');
+    if (paused.type !== 'customer.subscription.paused')
+      throw new Error(`Unexpected ${paused.type}`);
+    expect(paused.data.object.status_details?.paused.subscription.type).toBe(
+      'pause_requested',
+    );
+    await f.deliver();
+    const status = await f.billing.status('alice');
+    expect([status.access, status.subscription?.status]).toEqual([
+      false,
+      'paused',
+    ]);
+    await expect(f.start()).rejects.toThrow('Manage billing');
+    // Paused is not stale: it grants nothing until Stripe resumes it.
+    expect((await f.billing.reconcileStale({ limit: 10 })).reconciled).toEqual(
+      [],
+    );
+    f.time.advanceDays(10);
+    f.dev.transition(sub.id, 'resume');
+    await f.deliver();
+    expect(await f.billing.status('alice')).toMatchObject({
+      access: true,
+      // Resuming starts a new period at once.
+      accessUntil: new Date('2020-02-25T00:00:00Z'),
+    });
+  },
+);
+
+billingTest(
   'lost creation responses and concurrent clicks reuse durable idempotency keys',
   async ({ f }) => {
     f.dev.failNext('/v1/customers', true);

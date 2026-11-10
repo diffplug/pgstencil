@@ -1,12 +1,26 @@
+/** An environment file named by `--env-file` or `--env-file-if-exists`. */
+export interface EnvFile {
+  path: string;
+  /** From `--env-file-if-exists`: a missing file is skipped. */
+  optional: boolean;
+}
+
 /** The `pgstencil` command line, parsed without touching configuration or Docker. */
-export type Command =
+export type Command = (
   | {
-      name:
-        'status' | 'validate' | 'migrate' | 'verify' | 'reset' | 'gc' | 'stop';
+      name: 'status' | 'validate' | 'migrate';
+      /** `--also` directories, as given, in order. */
+      also?: string[];
+      requireDatabaseUrl?: true;
     }
+  | { name: 'verify' | 'reset' | 'gc' | 'stop' }
   | { name: 'create'; label: string; in?: string }
   | { name: 'schema' | 'types'; verify: boolean }
-  | { name: 'help' };
+  | { name: 'help' }
+) & {
+  /** Global `--env-file` and `--env-file-if-exists` options, in order. */
+  envFiles?: EnvFile[];
+};
 
 export const usage = `Usage: pgstencil <command> [options]
 
@@ -15,7 +29,7 @@ Commands:
   validate                    Check applied migrations still match their SQL files
   migrate                     Apply pending migrations
   create <name> [--in <dir>]  Add an empty numbered migration to <dir>, by default
-                              the last configured source
+                              the last configured source; never inside node_modules
   schema [--verify]           Write, or verify, the schema dump
   types [--verify]            Write, or verify, the Kysely declarations
   verify                      Verify the schema dump and declarations together
@@ -24,25 +38,54 @@ Commands:
   stop                        Stop this project's services when no database is in use
   help                        Show this message
 
+Options for status, validate and migrate:
+  --also <dir>                Read <dir> as one more migration source, after the
+                              configured ones, for this run only; repeatable
+  --require-database-url      Fail when DATABASE_URL is unset instead of using the
+                              development database
+
+Options for every command:
+  --env-file <path>           Load environment variables from <path> before reading
+                              configuration; variables already set win, and a later
+                              file wins over an earlier one; repeatable
+  --env-file-if-exists <path> The same, skipping a file that does not exist
+
 status, validate and migrate use DATABASE_URL when it is set, otherwise the
-development database. schema, types and verify use a disposable database built
-from the configured migrations. Configuration is read from pgstencil.json in
-PGSTENCIL_PROJECT_ROOT, or the current directory.`;
+development database; a DATABASE_URL that is set but empty is refused, since it
+usually means a missing secret. reset only ever recreates the development
+database, so it refuses to run while DATABASE_URL is set. schema, types and
+verify use a disposable database built from the configured migrations.
+Configuration is read from pgstencil.json in PGSTENCIL_PROJECT_ROOT, or the
+current directory.`;
+
+/**
+ * Loads `--env-file` and `--env-file-if-exists` files with Node's precedence:
+ * the environment wins over every file, and a later file over an earlier one.
+ * `process.loadEnvFile` never overwrites a variable, so load the last first.
+ * Node itself also checks these flags after a script name: it exits on a
+ * missing `--env-file` before pgstencil runs, but never loads the file.
+ */
+export function loadEnvFiles(files: readonly EnvFile[]): void {
+  for (const file of [...files].reverse()) {
+    try {
+      process.loadEnvFile(file.path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (!file.optional)
+        throw new Error(`--env-file ${file.path} does not exist`, {
+          cause: error,
+        });
+    }
+  }
+}
 
 /** A command line pgstencil cannot run; the CLI prints it with the usage text. */
 export class UsageError extends Error {
   override name = 'UsageError';
 }
 
-const PLAIN = new Set([
-  'status',
-  'validate',
-  'migrate',
-  'verify',
-  'reset',
-  'gc',
-  'stop',
-]);
+const INSPECT = new Set(['status', 'validate', 'migrate']);
+const PLAIN = new Set(['verify', 'reset', 'gc', 'stop']);
 const LABEL = /^[a-z][a-z0-9_]*$/;
 
 function noArguments(name: string, rest: readonly string[]): void {
@@ -52,8 +95,47 @@ function noArguments(name: string, rest: readonly string[]): void {
     );
 }
 
+/**
+ * Reads `--<option> <value>` or `--<option>=<value>` at `argv[index]`; returns
+ * the value and the index of its last argument, or undefined for another argument.
+ */
+function valueOption(
+  argv: readonly string[],
+  index: number,
+  option: string,
+  what: string,
+): [string, number] | undefined {
+  const arg = argv[index]!;
+  if (arg !== option && !arg.startsWith(option + '=')) return undefined;
+  const value = arg === option ? argv[++index] : arg.slice(option.length + 1);
+  if (!value || value.startsWith('-'))
+    throw new UsageError(`${option} needs ${what}`);
+  return [value, index];
+}
+
 /** Parse `argv` (without the node and script paths) into a command. */
 export function parseArguments(argv: readonly string[]): Command {
+  // Global options may appear anywhere on the command line.
+  const envFiles: EnvFile[] = [];
+  const remaining: string[] = [];
+  for (let index = 0; index < argv.length; index++) {
+    let found: [string, number] | undefined;
+    for (const option of ['--env-file', '--env-file-if-exists'])
+      if ((found = valueOption(argv, index, option, 'a path'))) {
+        envFiles.push({
+          path: found[0],
+          optional: option === '--env-file-if-exists',
+        });
+        index = found[1];
+        break;
+      }
+    if (!found) remaining.push(argv[index]!);
+  }
+  const command = parseCommand(remaining);
+  return envFiles.length ? { ...command, envFiles } : command;
+}
+
+function parseCommand(argv: readonly string[]): Command {
   const [name, ...rest] = argv;
   if (name === undefined) throw new UsageError('Missing command');
   if (name === 'help' || name === '--help' || name === '-h') {
@@ -62,7 +144,30 @@ export function parseArguments(argv: readonly string[]): Command {
   }
   if (PLAIN.has(name)) {
     noArguments(name, rest);
-    return { name: name as 'status' };
+    return { name: name as 'verify' };
+  }
+  if (INSPECT.has(name)) {
+    const also: string[] = [];
+    let requireDatabaseUrl = false;
+    for (let index = 0; index < rest.length; index++) {
+      const found = valueOption(rest, index, '--also', 'a directory');
+      if (found) {
+        also.push(found[0]);
+        index = found[1];
+      } else if (rest[index] === '--require-database-url') {
+        if (requireDatabaseUrl)
+          throw new UsageError('--require-database-url given twice');
+        requireDatabaseUrl = true;
+      } else
+        throw new UsageError(
+          `${name} accepts only --also <dir> and --require-database-url, got ${JSON.stringify(rest[index])}`,
+        );
+    }
+    return {
+      name: name as 'status',
+      ...(also.length ? { also } : {}),
+      ...(requireDatabaseUrl ? { requireDatabaseUrl: true } : {}),
+    };
   }
   if (name === 'schema' || name === 'types') {
     const flags = new Set(rest);

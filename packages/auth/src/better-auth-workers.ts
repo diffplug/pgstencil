@@ -46,8 +46,9 @@ export function createBetterAuthWorker<E extends BetterAuthWorkerBindings>(
     email: (env: E) => EmailSender;
     /**
      * The default sign-in email's sender, usually read from a binding such as
-     * `(env) => env.EMAIL_FROM`. When omitted, `undefined` or blank, it is
-     * `signin@<hostname of APP_ORIGIN>`. `renderEmail` receives it as `from`.
+     * `(env) => env.EMAIL_FROM`, and trimmed. When omitted, `undefined` or
+     * blank, it is `signin@<hostname of APP_ORIGIN>`, as `emailFrom` describes
+     * for `createAuthApp`. `renderEmail` receives it as `from`.
      */
     emailFrom?: string | ((env: E) => string);
     /** Builds this request's hooks; their pending work is kept alive with `waitUntil`. */

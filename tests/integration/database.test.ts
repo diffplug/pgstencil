@@ -1,5 +1,6 @@
 import { test, expect } from 'vitest';
 import { mkdtemp, readFile, writeFile, rm, mkdir, cp } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -9,6 +10,7 @@ import {
   validateMigrations,
   migrate,
   prepareTemplate,
+  projectRoot,
 } from '../../packages/pgstencil/src/database.ts';
 import { fixtureMigrations } from '../support/fixture-app.ts';
 
@@ -60,6 +62,76 @@ test('shared SQL sources upgrade independently while each history stays append-o
     'duplicate filenames',
   );
 });
+test('the command reads --also sources against DATABASE_URL under --require-database-url', async ({
+  onTestFinished,
+}) => {
+  const root = await mkdtemp(join(tmpdir(), 'pgstencil-also-'));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  await cp(fixtureMigrations, join(root, 'sql'), { recursive: true });
+  await mkdir(join(root, 'preview'));
+  await writeFile(
+    join(root, 'preview/900_preview_seed.sql'),
+    "-- Up Migration\nINSERT INTO users VALUES ('preview', 'preview@example.test', '2020-01-01');\n-- Down Migration\nDELETE FROM users WHERE id='preview';",
+  );
+  await writeFile(join(root, 'pgstencil.json'), '{ "migrations": "sql" }');
+  // Already migrated with the configured source; only the preview SQL is pending.
+  const lease = await allocateDatabase(fixtureMigrations);
+  onTestFinished(() => lease.close());
+  const pgstencil = (...argv: string[]) => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        join(projectRoot, 'packages/pgstencil/src/cli.ts'),
+        ...argv,
+      ],
+      {
+        cwd: projectRoot,
+        env: {
+          ...process.env,
+          PGSTENCIL_PROJECT_ROOT: root,
+          DATABASE_URL: lease.url,
+        },
+        encoding: 'utf8',
+      },
+    );
+    return {
+      status: result.status,
+      stdout: result.stdout.trim(),
+      stderr: result.stderr.trim(),
+    };
+  };
+  const required = '--require-database-url';
+  expect(pgstencil('migrate', '--also', 'preview', required)).toEqual({
+    status: 0,
+    stdout: 'Applied 900_preview_seed.sql',
+    stderr: '',
+  });
+  expect(
+    await queryDatabase(
+      lease.url,
+      "SELECT email FROM users WHERE id='preview'",
+    ),
+  ).toEqual([{ email: 'preview@example.test' }]);
+  const status = pgstencil('status', '--also=preview', required);
+  expect(status.status).toBe(0);
+  expect(status.stdout).toMatch(/900_preview_seed\.sql.*'preview'.*'applied'/);
+  expect(status.stdout).not.toContain('pending');
+  expect(pgstencil('validate', '--also', 'preview', required)).toEqual({
+    status: 0,
+    stdout: 'Applied SQL migration contents match.',
+    stderr: '',
+  });
+  // A database that took an --also source needs it on every later run.
+  expect(pgstencil('validate', required)).toEqual({
+    status: 1,
+    stdout: '',
+    stderr:
+      'pgstencil validate: Applied migration changed or missing: 900_preview_seed.sql',
+  });
+});
+
 test('warm templates produce isolated writable databases', async () => {
   const a = await allocateDatabase(fixtureMigrations);
   const b = await allocateDatabase(fixtureMigrations);

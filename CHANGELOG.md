@@ -1,14 +1,49 @@
 # Changelog
 
-The three packages (`pgstencil`, `@pgstencil/auth`, `@pgstencil/stripe`) share one version. They are 0.x releases: a minor version may break compatibility, and each breaking change below says how an application adapts. Releases before 0.5.0 are recorded only in the Git history.
+The three packages (`pgstencil`, `@pgstencil/auth`, `@pgstencil/stripe`) share one version. They are 0.x releases: a minor version may break compatibility, and each breaking change below says how an application adapts. Releases before 0.5.0 are recorded only in the Git history, with one note for an application upgrading across them: since 0.4.0, `testcontainers`, `node-pg-migrate`, `cheerio` and `turndown` are optional peers that the application installs itself, usually as devDependencies ([PACKAGES.md](PACKAGES.md#tooling-peers)).
 
 ## Unreleased
 
 Nothing yet.
 
+## 0.5.1 (2026-11-10)
+
+Fixes and compatible additions found while two applications adopted 0.5.0.
+
+### Fixed
+
+- **`pgstencil create` no longer writes into an installed package.** It wrote into the last configured source without checking, so a project whose sources were all package directories got a new SQL file inside `node_modules`. It now refuses any target inside `node_modules`, the default or one given with `--in`.
+- **`pgstencil status`, `validate` and `migrate` refuse a `DATABASE_URL` that is set but empty.** 0.5.0 passed the empty string to the driver, which then connected with its own defaults. An empty value is how a workflow sees a secret it lost.
+- **`pgstencil reset` refuses to run while `DATABASE_URL` is set.** It only ever recreates the development database and used to ignore the variable silently.
+- **`@pgstencil/auth`: the default sign-in sender is a valid address for an IP origin**: `signin@[127.0.0.1]`, or `signin@[IPv6:…]`, where it was `signin@127.0.0.1`. A non-blank `emailFrom` is trimmed.
+- **This changelog's 0.5.0 entry** gains the notes it was published without: the stripe 23 and Stripe API version move, the Better Auth pin, and the optional tooling peers introduced in 0.4.0.
+
+### Added
+
+- **`pgstencil status|validate|migrate --also <dir>`**, repeatable: one more migration source after the configured ones for that run, for SQL only some databases get, such as previews.
+- **`pgstencil status|validate|migrate --require-database-url`**: fail when `DATABASE_URL` is unset instead of using the development database.
+- **`--env-file <path>` and `--env-file-if-exists <path>`** on every `pgstencil` command, loaded before configuration is read.
+- **`pgstencil/email`** subpath: the email types, `EmailDev` and `escapeHtml` without the root's `node:crypto` import, for code a browser also loads. The `pgstencil` package also declares `"sideEffects": false`, so a production bundle that imports only `escapeHtml` from the root drops the rest.
+
+One message changed: `pgstencil status <argument>` reports `status accepts only --also <dir> and --require-database-url` where it said `status takes no arguments`.
+
 ## 0.5.0 (2026-11-10)
 
 This release is breaking.
+
+### Stripe 23 and a new Stripe API version
+
+These notes were missing when 0.5.0 was published.
+
+`@pgstencil/stripe` now peers on `stripe ^23.1.0` (0.4.3 accepted `^22.6.1`), so an application must move its own `stripe` dependency to 23. That moves `STRIPE_API_VERSION` to `2026-10-28.endive`, and `verifyWebhook` refuses an event at any other version, so this upgrade is a webhook cut-over, not a routine bump:
+
+- Create a webhook endpoint at `2026-10-28.endive` and give the new release its signing secret before it serves traffic, then retire the old endpoint. [BILLING.md](BILLING.md#moving-to-a-new-stripe-api-version) has the full procedure.
+- Checkout sessions send `allowed_payment_method_types: ['card']` where they sent `payment_method_types: ['card']`, which Stripe 23 removed. A Checkout creation whose response was lost just before the deploy is retried with the new parameters under its saved idempotency key, which Stripe refuses; repair that owner as for any ambiguous creation.
+- `verifyWebhook` passes its 300-second tolerance explicitly, so its behaviour is the same under stripe 23, which changed the SDK's default.
+- `Billing.reconcileAll({ dryRun, pageSize })` reconciles every owner holding a Stripe customer and reports what changed, for a one-off pass after a cut-over like this one.
+- StripeDev models the stripe 23 subscription and Checkout shapes, and gains `pause` and `resume` transitions.
+
+`@pgstencil/auth` moves its exact Better Auth pin from 1.7.16 to 1.7.18, which changes an application's lockfile and any dependency disclosure it publishes.
 
 ### Removed: the original code/link authentication
 

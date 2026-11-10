@@ -48,6 +48,31 @@ export function insideRoot(
   return path;
 }
 
+/**
+ * `configured` followed by each `--also` directory, resolved against `root`
+ * under the same inside-the-project-root rule; a directory that is already a
+ * source is refused rather than read twice.
+ */
+export function withExtraSources(
+  root: string,
+  configured: readonly string[],
+  also: readonly string[],
+): readonly string[] {
+  const sources = [...configured];
+  for (const directory of also) {
+    const path = insideRoot(root, directory, '--also');
+    if (sources.includes(path))
+      throw new Error(`--also ${directory} is already a migration source`);
+    sources.push(path);
+  }
+  return sources;
+}
+
+/** True when `path`, relative to `root`, passes through a `node_modules` directory. */
+export function insideNodeModules(root: string, path: string): boolean {
+  return relative(root, path).split(sep).includes('node_modules');
+}
+
 const describe = (value: unknown): string =>
   value === null ? 'null' : Array.isArray(value) ? 'an array' : typeof value;
 

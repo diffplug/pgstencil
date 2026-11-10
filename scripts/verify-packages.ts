@@ -154,6 +154,7 @@ await writeFile(
 await writeFile(
   join(directory, 'verify.ts'),
   `import { DevTime, DevRandom, EmailDev } from 'pgstencil';
+import { escapeHtml } from 'pgstencil/email';
 import { allocateDatabase, connectDatabase, readMigrations, migrate } from 'pgstencil/database';
 import { createAuthApp } from '@pgstencil/auth';
 import { betterAuthMigrations } from '@pgstencil/auth/better-auth-migrations';
@@ -177,6 +178,9 @@ for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
   assert.ok(readFileSync(new URL('../LICENSE', entry), 'utf8').startsWith('MIT License'));
 }
 assert.ok(readFileSync(new URL('compose.yaml', import.meta.resolve('pgstencil/database')), 'utf8').includes('integresql'));
+// The email subpath is for browser bundles too: it imports nothing, so no Node builtin can reach it.
+assert.equal(escapeHtml('<a href="x">&</a>'), '&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;');
+assert.doesNotMatch(readFileSync(new URL(import.meta.resolve('pgstencil/email')), 'utf8'), /\\bfrom ['"]|\\bimport\\(/);
 const sources = [betterAuthMigrations, billingMigrations];
 const lease = await allocateDatabase(sources);
 const billingDb = connectDatabase<BillingDB>(lease.url);

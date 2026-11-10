@@ -13,6 +13,22 @@ export function isIdentityEmail(email: string) {
   return domain === identityDomain || domain.endsWith('.' + identityDomain);
 }
 
+/**
+ * The sign-in email's sender: a non-blank `emailFrom`, trimmed, or
+ * `signin@<hostname of origin>`. An IP origin gets an RFC 5321 address
+ * literal (`signin@[127.0.0.1]`, `signin@[IPv6:::1]`), since a bare IP is not
+ * a valid domain. `origin` is already canonical, so the URL parser has
+ * normalized an IPv4 host to dotted decimal and bracketed an IPv6 one.
+ */
+export function signInSender(emailFrom: unknown, origin: string): string {
+  const configured = typeof emailFrom === 'string' ? emailFrom.trim() : '';
+  if (configured) return configured;
+  const host = new URL(origin).hostname;
+  if (host.startsWith('[')) return `signin@[IPv6:${host.slice(1, -1)}]`;
+  if (/^[\d.]+$/.test(host)) return `signin@[${host}]`;
+  return `signin@${host}`;
+}
+
 /** Better Auth requires an email column, even for a provider-only account.
  * This reserved address identifies an account; it is never a delivery address.
  * Include the client ID because provider subjects can be scoped to an app.

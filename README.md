@@ -117,7 +117,7 @@ pnpm db:migrate
 }
 ```
 
-`migrations` is one directory or an ordered list, each inside the project root; it defaults to `migrations`. List a package's source by its installed path and your own directory last, since that is where `create` writes. `schema` names the schema dump. Each `types` entry generates Kysely declarations to `out`, for the tables matching `include` (default `public.*`), minus `exclude`, with `defaultSchema` set when the tables live outside `public`; `types` needs the optional peer `kysely-codegen`. No other key is accepted. The project root is the working directory, or `PGSTENCIL_PROJECT_ROOT`.
+`migrations` is one directory or an ordered list, each inside the project root; it defaults to `migrations`. List a package's source by its installed path, which in a pnpm workspace is under the `node_modules` of the workspace package that depends on it (`app/node_modules/@pgstencil/…` when the project root is the workspace root). List your own directory last, since that is where `create` writes; it refuses a target inside `node_modules`. `schema` names the schema dump. Each `types` entry generates Kysely declarations to `out`, for the tables matching `include` (default `public.*`), minus `exclude`, with `defaultSchema` set when the tables live outside `public`; `types` needs the optional peer `kysely-codegen`. No other key is accepted. The project root is the working directory, or `PGSTENCIL_PROJECT_ROOT`.
 
 The schema dump and generated declarations are committed review artifacts, not schema inputs, so editor typechecking works without Docker. Each new migration fingerprint gets its own template; unchanged fingerprints reuse a ready template without rerunning initialization. Failed initializers are discarded, and interrupted initializers without a ready marker are rebuilt. Template cache identity includes SQL filenames/content, the Compose configuration and a format version.
 
@@ -136,7 +136,12 @@ Persistent development/production databases record applied-file checksums. Editi
 | `pgstencil gc`                | `db:gc`               | Clear cached test templates/databases when idle                     |
 | `pgstencil stop`              | `db:stop`             | Stop this checkout's services when idle; retain its Postgres volume |
 
-`DATABASE_URL` directs `status`, `validate` and `migrate` at an explicitly supplied persistent database. Otherwise they use `pgstencil_dev`. Schema/type commands always use a disposable migrated clone. Never point template management at a production cluster. `pnpm check` runs formatting, typechecking and all tests.
+`DATABASE_URL` directs `status`, `validate` and `migrate` at an explicitly supplied persistent database. Otherwise they use `pgstencil_dev`. A `DATABASE_URL` that is set but empty is refused, because that is how a workflow sees a secret it lost. Those three commands also take:
+
+- `--also <dir>`, repeatable: one more migration source after the configured ones, for this run only, such as SQL that only preview databases get. A database that has applied files from an `--also` directory needs the same option on every later run, or validation reports them missing.
+- `--require-database-url`: fail when `DATABASE_URL` is unset instead of using the development database. Use it in every deployment script.
+
+Every command takes `--env-file <path>` and `--env-file-if-exists <path>`, repeatable, loaded before `pgstencil.json` is read, so a file can set `PGSTENCIL_PROJECT_ROOT` and `DATABASE_URL`. Variables already in the environment win, and a later file wins over an earlier one. Node itself also notices these two flags: a missing `--env-file` stops in Node with exit code 9, and a missing `--env-file-if-exists` prints Node's own notice. `reset` refuses to run while `DATABASE_URL` is set, since it only ever recreates the development database. Schema/type commands always use a disposable migrated clone. Never point template management at a production cluster. `pnpm check` runs formatting, typechecking and all tests.
 
 Local services run PostgreSQL 18. The 18 image keeps its data under `/var/lib/postgresql/18/docker` and refuses a volume holding a 17 cluster, so the volume is named `postgres-18-data`. A checkout that last ran PostgreSQL 17 starts a fresh development database; its old volume stays until removed with `docker volume rm <project>_postgres-data`, and `docker volume ls` lists it.
 

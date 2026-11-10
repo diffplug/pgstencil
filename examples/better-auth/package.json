@@ -2,14 +2,19 @@
   "name": "@pgstencil/example-better-auth",
   "private": true,
   "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist"
+  },
   "dependencies": {
     "@hono/node-server": "2.1.6",
+    "@pgstencil/auth": "workspace:*",
+    "@pgstencil/stripe": "workspace:*",
     "better-auth": "1.7.18",
     "hono": "^4.13.7",
     "kysely": "^0.29.5",
     "pg": "^8.16.0",
     "pgstencil": "workspace:*",
-    "@pgstencil/auth": "workspace:*"
+    "stripe": "^23.1.0"
   },
   "devDependencies": {
     "node-pg-migrate": "^9.0.0",

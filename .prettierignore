@@ -4,6 +4,6 @@ pnpm-lock.yaml
 **/dist/**
 **/snapshots/**
 **/db.generated.ts
-examples/login/schema.sql
+examples/better-auth/schema.sql
 
 .vscode/

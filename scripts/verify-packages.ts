@@ -68,6 +68,9 @@ for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
         ).version;
   }
 }
+// A tooling peer's own peer that is also a shared library (kysely-codegen's
+// kysely) is the application's runtime copy, not a second devDependency.
+for (const name of Object.keys(peers)) delete toolingPeers[name];
 // An application that imports only runtime entry points, installed the way it
 // deploys: none of the tooling may land, even with peers auto-installed.
 const runtime = await mkdtemp(join(tmpdir(), 'pgstencil-runtime-'));
@@ -137,20 +140,31 @@ await writeFile(
     2,
   ),
 );
+// The installed `pgstencil` command reads this, naming package sources by
+// their installed paths the way an application does.
+await writeFile(
+  join(directory, 'pgstencil.json'),
+  JSON.stringify({
+    migrations: [
+      'node_modules/@pgstencil/auth/better-auth-migrations',
+      'node_modules/@pgstencil/stripe/migrations',
+    ],
+  }),
+);
 await writeFile(
   join(directory, 'verify.ts'),
   `import { DevTime, DevRandom, EmailDev } from 'pgstencil';
 import { allocateDatabase, connectDatabase, readMigrations, migrate } from 'pgstencil/database';
-import { Auth, type AuthDB } from '@pgstencil/auth';
-import { authMigrations } from '@pgstencil/auth/migrations';
+import { createAuthApp } from '@pgstencil/auth';
 import { betterAuthMigrations } from '@pgstencil/auth/better-auth-migrations';
-import { createAuthApp } from '@pgstencil/auth/better-auth';
+import { createBetterAuthWorker } from '@pgstencil/auth/better-auth-workers';
 import { deterministicScope } from '@pgstencil/auth/better-auth-testing';
-import { createAuthHttp } from '@pgstencil/auth/http';
+import { postmarkEmail } from '@pgstencil/auth/postmark';
 import { Billing, type BillingDB } from '@pgstencil/stripe';
 import { billingMigrations } from '@pgstencil/stripe/migrations';
 import { createStripeDev } from '@pgstencil/stripe/testing';
 import { strict as assert } from 'node:assert';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 const pgstencilVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.resolve('pgstencil')), 'utf8')).version;
 for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
@@ -163,42 +177,51 @@ for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
   assert.ok(readFileSync(new URL('../LICENSE', entry), 'utf8').startsWith('MIT License'));
 }
 assert.ok(readFileSync(new URL('compose.yaml', import.meta.resolve('pgstencil/database')), 'utf8').includes('integresql'));
-const lease = await allocateDatabase([authMigrations, billingMigrations, betterAuthMigrations]);
-const db = connectDatabase<AuthDB>(lease.url);
+const sources = [betterAuthMigrations, billingMigrations];
+const lease = await allocateDatabase(sources);
 const billingDb = connectDatabase<BillingDB>(lease.url);
 const time = new DevTime(); const random = new DevRandom(); const email = new EmailDev(time);
 const dev = await createStripeDev(time, random);
 try {
-  const auth = new Auth({ db, time, random, email, origin: 'https://consumer.test', secret: 'packed-consumer-secret-at-least-32' });
-  const flow = await auth.newFlow();
-  assert.equal((await auth.send(flow, 'packed@example.test', 'local')).ok, true);
-  const message = await email.next(); const code = message.text.match(/code is (\\d{4}) (\\d{4})/)!.slice(1).join('');
-  const result = await auth.verify((await auth.pending(flow.cookie))!, 'code', code, undefined, 'local');
-  assert.ok(result.ok); const session = await auth.session(result.session); assert.ok(session);
-  const billing = new Billing(billingDb, dev.stripe, time, random, { prices: dev.prices, trialDays: 14, webhookSecret: dev.webhookSecret, live: false, origin: 'https://consumer.test' });
-  await billing.checkout(session.user_id, session.email, 'monthly');
-  assert.equal((await billing.status(session.user_id)).access, false);
-  dev.completeCheckout([...dev.checkouts.keys()][0]!);
-  for (const event of dev.events) { const signed = dev.signed(event); await billing.webhook(signed.body, signed.signature); }
-  assert.equal((await billing.status(session.user_id)).access, true);
-  assert.equal(typeof createAuthHttp, 'function');
-  await migrate(lease.url, await readMigrations([authMigrations, billingMigrations, betterAuthMigrations]));
-  const modern = createAuthApp({databaseUrl:lease.url,origin:'https://consumer.test',secret:'packed-consumer-secret-at-least-32',email,sessionPolicy:'single'});
+  await migrate(lease.url, await readMigrations(sources));
+  // The installed bin, run by node from dist without tsx, against this project's
+  // own pgstencil.json and the leased database.
+  const cliEnv: NodeJS.ProcessEnv = { ...process.env, DATABASE_URL: lease.url };
+  delete cliEnv.PGSTENCIL_PROJECT_ROOT;
+  const pgstencil = (...args: string[]) => execFileSync('node_modules/.bin/pgstencil', args, { env: cliEnv, encoding: 'utf8' });
+  const status = pgstencil('status');
+  const rows = status.split('\\n');
+  for (const file of await readMigrations(sources)) assert.ok(rows.some((row) => row.includes(file.name) && row.includes("'applied'")), status);
+  assert.doesNotMatch(status, /pending/);
+  assert.equal(pgstencil('validate').trim(), 'Applied SQL migration contents match.');
+  const unknown = spawnSync('node_modules/.bin/pgstencil', ['up'], { env: cliEnv, encoding: 'utf8' });
+  assert.equal(unknown.status, 2); assert.match(unknown.stderr, /Usage: pgstencil <command>/);
+  const auth = createAuthApp({databaseUrl:lease.url,origin:'https://consumer.test',secret:'packed-consumer-secret-at-least-32',email,sessionPolicy:'single'});
   try {
-    const csrfResponse = await modern.app.fetch(new Request('https://consumer.test/api/auth/csrf'));
+    const csrfResponse = await auth.app.fetch(new Request('https://consumer.test/api/auth/csrf'));
     const csrf = (await csrfResponse.json()).csrf;
-    const cookie = csrfResponse.headers.getSetCookie().map((v) => v.split(';')[0]).join('; ');
-    const post = (path: string, body: object) => modern.app.fetch(new Request('https://consumer.test/api/auth/' + path, {method:'POST',headers:{origin:'https://consumer.test',cookie,'x-csrf-token':csrf,'content-type':'application/json'},body:JSON.stringify(body)}),{incoming:{socket:{remoteAddress:'127.0.0.1'}}});
-    assert.equal((await post('email-otp/send-verification-otp',{email:'modern@example.test',type:'sign-in'})).status,200);
+    const csrfCookie = csrfResponse.headers.getSetCookie().map((v) => v.split(';')[0]).join('; ');
+    const post = (path: string, body: object) => auth.app.fetch(new Request('https://consumer.test/api/auth/' + path, {method:'POST',headers:{origin:'https://consumer.test',cookie:csrfCookie,'x-csrf-token':csrf,'content-type':'application/json'},body:JSON.stringify(body)}),{incoming:{socket:{remoteAddress:'127.0.0.1'}}});
+    assert.equal((await post('email-otp/send-verification-otp',{email:'packed@example.test',type:'sign-in'})).status,200);
     const otp = (await email.next()).text.match(/\\b\\d{8}\\b/)![0];
-    const signedIn = await post('sign-in/email-otp',{email:'modern@example.test',otp});
+    const signedIn = await post('sign-in/email-otp',{email:'packed@example.test',otp});
     assert.equal(signedIn.status,200);
-    assert.ok(signedIn.headers.getSetCookie()[0].startsWith('__Host-pgstencil.session_token='));
+    const sessionCookie = signedIn.headers.getSetCookie()[0]!.split(';')[0]!;
+    assert.ok(sessionCookie.startsWith('__Host-pgstencil.session_token='));
     assert.equal((await signedIn.json()).token,undefined);
-    assert.equal(typeof deterministicScope.run,'function');
-  } finally { await modern.close(); }
-  console.log('Packed imports, declarations, SQL assets, legacy/Better Auth login and card-required trial passed.');
-} finally { await db.destroy(); await billingDb.destroy(); await dev.close(); await lease.close(); email.close(); }
+    const session = await auth.auth.api.getSession({headers:new Headers({cookie:sessionCookie})});
+    assert.ok(session); assert.equal(session.user.email,'packed@example.test');
+    const billing = new Billing(billingDb, dev.stripe, time, random, { prices: dev.prices, trialDays: 14, webhookSecret: dev.webhookSecret, live: false, origin: 'https://consumer.test' });
+    await billing.checkout(session.user.id, session.user.email, 'monthly');
+    assert.equal((await billing.status(session.user.id)).access, false);
+    dev.completeCheckout([...dev.checkouts.keys()][0]!);
+    for (const event of dev.events) { const signed = dev.signed(event); await billing.webhook(signed.body, signed.signature); }
+    assert.equal((await billing.status(session.user.id)).access, true);
+  } finally { await auth.close(); }
+  assert.equal(typeof createBetterAuthWorker({email:() => postmarkEmail('token','signin@consumer.test')}).fetch,'function');
+  assert.equal(typeof deterministicScope.run,'function');
+  console.log('Packed imports, declarations, SQL assets, the pgstencil command, Better Auth login and card-required trial passed.');
+} finally { await billingDb.destroy(); await dev.close(); await lease.close(); email.close(); }
 `,
 );
 await writeFile(
@@ -254,6 +277,13 @@ for (const name of ['pgstencil', '@pgstencil/auth', '@pgstencil/stripe']) {
 execFileSync('pnpm', ['exec', 'tsc'], { cwd: directory, stdio: 'inherit' });
 // Share only Docker service state, never workspace code or module resolution.
 execFileSync(process.execPath, ['out/verify.js'], {
+  cwd: directory,
+  stdio: 'inherit',
+  env: { ...process.env, PGSTENCIL_PROJECT_ROOT: projectRoot },
+});
+// The packed generators, with the consumer's kysely-codegen, must reproduce
+// this workspace's committed schema dump and declarations byte for byte.
+execFileSync(join(directory, 'node_modules/.bin/pgstencil'), ['verify'], {
   cwd: directory,
   stdio: 'inherit',
   env: { ...process.env, PGSTENCIL_PROJECT_ROOT: projectRoot },

@@ -1,9 +1,5 @@
 import { test, expect } from 'vitest';
-import { build } from 'esbuild';
-import { builtinModules } from 'node:module';
-import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import request from 'supertest';
 import { createTestContext } from '../../packages/pgstencil/src/testing.ts';
 import { queryDatabase } from '../../packages/pgstencil/src/postgres.ts';
@@ -17,38 +13,26 @@ import { authOptions } from '../../examples/better-auth/src/auth.ts';
 import { connectDatabase } from '../../packages/pgstencil/src/postgres.ts';
 import { listen } from '../../examples/better-auth/src/node.ts';
 import type { createDeterministicApp } from '../support/better-auth-entry.ts';
+import { bundleDeterministicApp } from '../support/better-auth-bundle.ts';
+import type { DiagnosticRecord } from '../../packages/pgstencil/src/diagnostics.ts';
+import type { SignInEmailInput } from '../../packages/auth/src/better-auth.ts';
 
 const origin = 'https://better-auth.example.test';
 const migrations = resolve('packages/auth/better-auth-migrations');
-const built = (async () => {
-  const result = await build({
-    entryPoints: ['tests/support/better-auth-entry.ts'],
-    bundle: true,
-    write: false,
-    format: 'esm',
-    platform: 'node',
-    packages: 'bundle',
-    external: [
-      ...builtinModules,
-      ...builtinModules.map((name) => `node:${name}`),
-      'pg-native',
-    ],
-    inject: [resolve('packages/auth/src/better-auth-testing.ts')],
-    banner: {
-      js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
-    },
-  });
-  await mkdir('.build', { recursive: true });
-  const file = resolve('.build/better-auth-test.mjs');
-  await writeFile(file, result.outputFiles[0]!.text);
-  return (await import(pathToFileURL(file).href)) as {
-    createDeterministicApp: typeof createDeterministicApp;
-  };
-})();
+const built = bundleDeterministicApp('better-auth-test');
 async function fixture(
   now = '2020-01-01T00:00:00.000Z',
   sessionPolicy: 'single' | 'multiple' = 'multiple',
-  extra: { ipAddressHeaders?: string[] } = {},
+  extra: Partial<
+    Pick<
+      Parameters<typeof createDeterministicApp>[0],
+      | 'ipAddressHeaders'
+      | 'appName'
+      | 'emailFrom'
+      | 'renderEmail'
+      | 'diagnostics'
+    >
+  > = {},
 ) {
   const context = await createTestContext({
     migrations,
@@ -233,7 +217,7 @@ test('Better Auth time: 23 hours, expiration boundary, isolated async contexts a
   expect(two.before).toBe(b.time.now().getTime());
   expect(two.after).toBe(two.before);
   a.time.advanceHours(1);
-  // Better Auth 1.7.3 compares expiresAt < now: equality remains valid for one millisecond.
+  // Better Auth compares expiresAt < now: equality remains valid for one millisecond.
   expect((await a.get(alice.cookie)).body.user.email).toBe(
     'alice@example.test',
   );
@@ -820,4 +804,161 @@ for (const policy of ['single', 'multiple'] as const)
     expect((await f.get(first.cookie)).body !== null).toBe(
       policy === 'multiple',
     );
+  });
+
+test('sign-in email: the default sender is signin@ the origin hostname, and emailFrom overrides it', async ({
+  onTestFinished,
+}) => {
+  const derived = await fixture();
+  onTestFinished(() => derived.close());
+  expect((await login(derived)).email.from).toBe(
+    'signin@better-auth.example.test',
+  );
+  // A blanked binding counts as omitted.
+  const blank = await fixture(undefined, undefined, { emailFrom: ' ' });
+  onTestFinished(() => blank.close());
+  expect((await login(blank)).email.from).toBe(
+    'signin@better-auth.example.test',
+  );
+  const explicit = await fixture(undefined, undefined, {
+    emailFrom: 'Example <hello@mail.example.test>',
+  });
+  onTestFinished(() => explicit.close());
+  const { email } = await login(explicit);
+  expect(email.from).toBe('Example <hello@mail.example.test>');
+  expect(email.subject).toBe('Your sign-in code');
+});
+
+test('sign-in email: the default renderer keeps appName out of the HTML body', async ({
+  onTestFinished,
+}) => {
+  const appName = `<b>Tom & "Jerry's"</b>`;
+  const f = await fixture(undefined, undefined, { appName });
+  onTestFinished(() => f.close());
+  const { email, otp } = await login(f);
+  expect(email.subject).toBe(`Your ${appName} sign-in code`);
+  expect(email.text).toBe(
+    `Your sign-in code is ${otp}. It expires in 10 minutes.`,
+  );
+  expect(email.html).toBe(
+    `<p>Your sign-in code is <strong>${otp}</strong>.</p><p>It expires in 10 minutes.</p>`,
+  );
+});
+
+test('sign-in email: a custom renderEmail composes the message and its code signs in', async ({
+  onTestFinished,
+}) => {
+  const inputs: SignInEmailInput[] = [];
+  const f = await fixture(undefined, undefined, {
+    appName: 'Rhythm',
+    emailFrom: 'Rhythm <signin@rhythm.example.test>',
+    renderEmail: async (input) => {
+      inputs.push(input);
+      return {
+        from: input.from,
+        to: [input.email],
+        replyTo: 'help@rhythm.example.test',
+        subject: `Code ${input.otp}`,
+        text: `Bonjour ! Code : ${input.otp} (${input.expiresInMinutes} min)`,
+        html: `<p>Bonjour ! <b>${input.otp}</b></p>`,
+      };
+    },
+  });
+  onTestFinished(() => f.close());
+  const { email, otp } = await login(f);
+  expect(inputs).toEqual([
+    {
+      email: 'alice@example.test',
+      otp,
+      expiresInMinutes: 10,
+      appName: 'Rhythm',
+      from: 'Rhythm <signin@rhythm.example.test>',
+    },
+  ]);
+  expect(email).toEqual({
+    capturedAt: '2020-01-01T00:00:00.000Z',
+    from: 'Rhythm <signin@rhythm.example.test>',
+    to: ['alice@example.test'],
+    replyTo: 'help@rhythm.example.test',
+    subject: `Code ${otp}`,
+    text: `Bonjour ! Code : ${otp} (10 min)`,
+    html: `<p>Bonjour ! <b>${otp}</b></p>`,
+  });
+});
+
+for (const [name, renderEmail] of [
+  [
+    'throws',
+    () => {
+      throw new Error('private-render alice@example.test');
+    },
+  ],
+  [
+    'rejects',
+    async () => {
+      throw new Error('private-render alice@example.test');
+    },
+  ],
+  [
+    'addresses someone else',
+    (input: SignInEmailInput) => ({
+      from: input.from,
+      to: ['attacker@example.test'],
+      subject: 'code',
+      text: input.otp,
+      html: input.otp,
+    }),
+  ],
+  [
+    'adds a recipient',
+    (input: SignInEmailInput) => ({
+      from: input.from,
+      to: [input.email, 'attacker@example.test'],
+      subject: 'code',
+      text: input.otp,
+      html: input.otp,
+    }),
+  ],
+  [
+    'adds a bcc',
+    (input: SignInEmailInput) => ({
+      from: input.from,
+      to: [input.email],
+      bcc: ['attacker@example.test'],
+      subject: 'code',
+      text: input.otp,
+      html: input.otp,
+    }),
+  ],
+  ['returns nothing', () => undefined as never],
+] as const)
+  test(`sign-in email: a renderer that ${name} fails the send and delivers nothing`, async ({
+    onTestFinished,
+  }) => {
+    const records: DiagnosticRecord[] = [];
+    const f = await fixture(undefined, undefined, {
+      renderEmail,
+      diagnostics: { sink: (record) => records.push(record) },
+    });
+    onTestFinished(() => f.close());
+    const response = await f.post('email-otp/send-verification-otp', {
+      email: 'alice@example.test',
+      type: 'sign-in',
+    });
+    // Better Auth answers a failed send like a successful one; nothing reveals the failure.
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(response.body)).not.toContain('private-render');
+    expect(f.email.all()).toEqual([]);
+    const failed = records.filter(
+      (record) => record.event === 'email.delivery.failed',
+    );
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ reason: 'unexpected_error' });
+    expect(failed[0]).not.toHaveProperty('stage');
+    expect(records.map((record) => record.event)).not.toContain(
+      'email.delivery.succeeded',
+    );
+    const logged = JSON.stringify(records);
+    expect(logged).not.toContain('alice@example.test');
+    expect(logged).not.toContain('attacker@example.test');
   });

@@ -13,8 +13,9 @@ import { build } from 'esbuild';
 const repo = fileURLToPath(new URL('..', import.meta.url));
 
 /**
- * Only `pgstencil/database`, `pgstencil/testing` and `pgstencil/snapshots` use
- * these. `packages:verify` reads the same list for its runtime-only install.
+ * Only `pgstencil/database`, `pgstencil/testing`, `pgstencil/snapshots` and the
+ * `pgstencil` command use these. `packages:verify` reads the same list for its
+ * runtime-only install.
  */
 const TOOLING = JSON.parse(
   readFileSync(join(repo, 'scripts/tooling-peers.json'), 'utf8'),
@@ -98,12 +99,18 @@ async function tooling(entry) {
   return seen;
 }
 
-const entries = packages.flatMap(({ dir, manifest }) =>
-  Object.entries(manifest.exports).map(([subpath, file]) => ({
+// Commands count as entry points too: `pgstencil types` is the only one that
+// loads kysely-codegen, and it must still do so through importPeer.
+const entries = packages.flatMap(({ dir, manifest }) => [
+  ...Object.entries(manifest.exports).map(([subpath, file]) => ({
     name: join(manifest.name, subpath),
     file: join(dir, file),
   })),
-);
+  ...Object.entries(manifest.bin ?? {}).map(([command, file]) => ({
+    name: `${command} (bin)`,
+    file: join(dir, file),
+  })),
+]);
 
 test('no entry point statically reaches a tooling package', async () => {
   const reached = await Promise.all(

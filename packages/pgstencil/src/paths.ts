@@ -1,29 +1,27 @@
 import { createHash } from 'node:crypto';
-import { resolve, join, relative, isAbsolute, sep } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { configFileName, insideRoot, readConfig } from './config.ts';
+export {
+  configFileName,
+  parseConfig,
+  readConfig,
+  type ProjectConfig,
+  type TypesTarget,
+} from './config.ts';
 /** Workspace paths, kept free of heavy imports so light scripts can use them. */
 export const projectRoot = resolve(
   process.env.PGSTENCIL_PROJECT_ROOT ?? process.cwd(),
 );
-const configFile = join(projectRoot, 'pgstencil.json');
-const config = existsSync(configFile)
-  ? (JSON.parse(readFileSync(configFile, 'utf8')) as { migrations?: string })
-  : {};
 /** Resolve a configured migrations directory, refusing one outside the project root. */
 export function migrationsDirectory(root: string, configured: string) {
-  const directory = resolve(root, configured);
-  const path = relative(root, directory);
-  if (path === '..' || path.startsWith('..' + sep) || isAbsolute(path))
-    throw new Error(
-      `pgstencil.json migrations must stay inside the project root: ${configured}`,
-    );
-  return directory;
+  return insideRoot(root, configured, `${configFileName} migrations`);
 }
-export const defaultMigrations = migrationsDirectory(
-  projectRoot,
-  config.migrations ?? 'migrations',
-);
+/** The project's `pgstencil.json`, or every default when it has none. */
+export const projectConfig = readConfig(projectRoot);
+/** The configured migration sources, in order; `["migrations"]` by default. */
+export const defaultMigrations: readonly string[] = projectConfig.migrations;
 export const stateDirectory = join(projectRoot, '.pgstencil');
 export const composeFile = existsSync(join(projectRoot, 'compose.yaml'))
   ? join(projectRoot, 'compose.yaml')

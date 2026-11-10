@@ -1,10 +1,6 @@
 import type { DiagnosticRecord } from '../../packages/pgstencil/src/diagnostics.ts';
 import { test, expect } from 'vitest';
-import { build } from 'esbuild';
-import { builtinModules } from 'node:module';
-import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { createTestContext } from '../../packages/pgstencil/src/testing.ts';
 import { queryDatabase } from '../../packages/pgstencil/src/postgres.ts';
 import {
@@ -13,35 +9,16 @@ import {
   betterAuthCredentials as allOAuthCredentials,
   type GrantOptions,
 } from '../support/oauth-server.ts';
+import { bundleDeterministicApp } from '../support/better-auth-bundle.ts';
 import type { AuthOptions } from '../../packages/auth/src/better-auth.ts';
 import { identityEmail } from '../../packages/auth/src/better-auth-email.ts';
-import type { createDeterministicApp } from '../support/better-auth-entry.ts';
 import {
   providers,
   type Provider,
 } from '../../examples/better-auth/src/oauth.ts';
 
 const origin = 'https://auth.example.test';
-const built = (async () => {
-  const result = await build({
-    entryPoints: ['tests/support/better-auth-entry.ts'],
-    bundle: true,
-    write: false,
-    platform: 'node',
-    format: 'esm',
-    external: [...builtinModules, 'node:*', 'pg-native'],
-    inject: [resolve('packages/auth/src/better-auth-testing.ts')],
-    banner: {
-      js: "import {createRequire} from 'node:module'; const require = createRequire(import.meta.url);",
-    },
-  });
-  await mkdir('.build', { recursive: true });
-  const path = resolve('.build/better-auth-oauth-test.mjs');
-  await writeFile(path, result.outputFiles[0]!.text);
-  return (await import(pathToFileURL(path).href)) as {
-    createDeterministicApp: typeof createDeterministicApp;
-  };
-})();
+const built = bundleDeterministicApp('better-auth-oauth-test');
 async function fixture(
   policy: 'single' | 'multiple' = 'multiple',
   accountLinking: 'explicit' | 'same-email' = 'explicit',

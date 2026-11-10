@@ -334,9 +334,11 @@ export async function createStripeDev(
       requests.push({
         method: req.method!,
         path,
-        // The SDK sends a DELETE's parameters in its query string.
+        // The SDK sends a GET's or DELETE's parameters in its query string.
         body: Object.fromEntries(
-          req.method === 'DELETE' ? url.searchParams : body,
+          req.method === 'GET' || req.method === 'DELETE'
+            ? url.searchParams
+            : body,
         ),
         ...(key ? { key } : {}),
       });
@@ -451,12 +453,28 @@ export async function createStripeDev(
         session.url = `${origin}/checkout/${session.id}`;
         result = session;
       } else if (path === '/v1/subscriptions' && req.method === 'GET') {
+        // As Stripe lists: newest first, `limit` (1-100, default 10) at a
+        // time, resuming after the `starting_after` ID, with `has_more` true
+        // while any remain. The `status` filter is not modeled.
+        const query = url.searchParams;
+        const limit = Number(query.get('limit') ?? 10);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+          throw new Error('limit must be an integer between 1 and 100');
+        if (query.has('ending_before'))
+          throw new Error('StripeDev does not support ending_before');
+        const listed = [...subscriptions.values()]
+          .filter((s) => s.customer === query.get('customer'))
+          .reverse();
+        const after = query.get('starting_after');
+        const start =
+          after === null ? 0 : listed.findIndex((s) => s.id === after) + 1;
+        if (after !== null && !start)
+          throw new Error(`No such subscription: '${after}'`);
         result = {
           object: 'list',
-          has_more: false,
-          data: [...subscriptions.values()].filter(
-            (s) => s.customer === url.searchParams.get('customer'),
-          ),
+          url: '/v1/subscriptions',
+          has_more: start + limit < listed.length,
+          data: listed.slice(start, start + limit),
         };
       } else if (path.startsWith('/v1/charges/') && req.method === 'GET') {
         const charge = charges.get(path.split('/')[3]!);

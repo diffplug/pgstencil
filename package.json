@@ -3,13 +3,18 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.18.0",
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "24.22.2",
+      "onFail": "download"
+    }
+  },
   "engines": {
     "node": ">=24"
   },
   "scripts": {
-    "dev": "node --env-file-if-exists=.env --import tsx examples/login/src/dev.ts",
-    "dev:better-auth": "node --import tsx examples/better-auth/src/dev.ts",
-    "test:better-auth": "vitest run tests/integration/better-auth.test.ts tests/integration/better-auth-workers.test.ts tests/integration/better-auth-oauth.test.ts",
+    "dev": "node --env-file-if-exists=.env --import tsx examples/better-auth/src/dev.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
@@ -19,16 +24,16 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "pnpm format:check && pnpm typecheck && pnpm test:scripts && pnpm test",
-    "db:status": "tsx scripts/db.ts status",
-    "db:validate": "tsx scripts/db.ts validate",
-    "db:migrate": "tsx scripts/db.ts migrate",
-    "db:migration:create": "tsx scripts/db.ts create",
-    "db:schema": "tsx scripts/db.ts schema",
-    "db:types": "tsx scripts/db.ts types",
-    "db:verify": "tsx scripts/db.ts verify",
-    "db:reset": "tsx scripts/db.ts reset",
-    "db:stop": "tsx scripts/db.ts stop",
-    "db:gc": "tsx scripts/db.ts gc",
+    "db:status": "tsx packages/pgstencil/src/cli.ts status",
+    "db:validate": "tsx packages/pgstencil/src/cli.ts validate",
+    "db:migrate": "tsx packages/pgstencil/src/cli.ts migrate",
+    "db:migration:create": "tsx packages/pgstencil/src/cli.ts create",
+    "db:schema": "tsx packages/pgstencil/src/cli.ts schema",
+    "db:types": "tsx packages/pgstencil/src/cli.ts types",
+    "db:verify": "tsx packages/pgstencil/src/cli.ts verify",
+    "db:reset": "tsx packages/pgstencil/src/cli.ts reset",
+    "db:stop": "tsx packages/pgstencil/src/cli.ts stop",
+    "db:gc": "tsx packages/pgstencil/src/cli.ts gc",
     "packages:build": "node --import tsx scripts/build-packages.ts",
     "packages:pack": "node --import tsx scripts/pack-packages.ts",
     "packages:verify": "pnpm packages:pack && node --import tsx scripts/verify-packages.ts"
@@ -39,7 +44,6 @@
     "@types/supertest": "^7.0.0",
     "@types/turndown": "^5.0.0",
     "esbuild": "^0.28.2",
-    "kysely-codegen": "^0.20.0",
     "miniflare": "5.20261104.0-beta",
     "prettier": "^3.6.0",
     "supertest": "^7.2.0",

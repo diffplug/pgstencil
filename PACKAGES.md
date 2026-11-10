@@ -1,6 +1,6 @@
 # Consuming pgstencil
 
-Three packages share version 0.4.2: `pgstencil` (infrastructure and test primitives), `@pgstencil/auth` (email/OAuth/session services and a JSON HTTP adapter), and `@pgstencil/stripe` (SaaS billing and StripeDev). They are published to npm as 0.x releases, so a minor release may break compatibility.
+Three packages share one version, the `version` in each `packages/*/package.json`: `pgstencil` (infrastructure, test primitives and the database CLI), `@pgstencil/auth` (sign-in on Better Auth: email codes, OAuth providers, sessions and a Workers adapter), and `@pgstencil/stripe` (SaaS billing and StripeDev). They are published to npm as 0.x releases, so a minor release may break compatibility; [CHANGELOG.md](CHANGELOG.md) says how an application adapts.
 
 Run `pnpm packages:pack` to produce the three archives in `dist/packages`. They contain ESM JavaScript, TypeScript declarations, the MIT license, and required SQL/Compose assets. Workspace development uses source exports; packing switches the exports to compiled files. Nothing runs migrations during install.
 
@@ -8,7 +8,7 @@ Copy the tarballs to a consumer's `vendor/` directory, depend on them using `fil
 
 Every archive carries `package/dist/provenance.json`, holding the 40-character `commit` it was packed from plus `"dirty": true` when `--allow-dirty` packed a modified tree. Read it without unpacking the archive: `tar -xOf vendor/pgstencil-0.1.0.tgz package/dist/provenance.json`. That path is the contract; nothing else in the archive identifies its source, since npm's `gitHead` is absent from a `pnpm pack` of a private package. A consumer should record the commit it vendored, re-derive it from the archive on every build, and refuse an archive whose commit differs or that is marked dirty. `pnpm packages:verify` makes the same assertion against this checkout's `HEAD`, so a stale archive fails CI here. Having recovered the commit, a consumer confirms it was audited by reading its check run — `gh api repos/diffplug/pgstencil/commits/<sha>/check-runs` lists `security-audit`, which succeeds only when that commit's audit against [SECURITY.md](SECURITY.md) reached `VERDICT: PASS`.
 
-`pnpm packages:verify` builds, packs, installs into an unrelated temporary pnpm project, checks TypeScript declarations, and runs an email login and required-card trial against a real cloned database. The project declares each peer at the version this workspace tests, and fails on an unmet peer. It shares this repository's Docker service state, but loads all code and SQL from installed archives. The consumer directory is printed for inspection.
+`pnpm packages:verify` builds, packs, installs into an unrelated temporary pnpm project, checks TypeScript declarations, and runs a Better Auth email sign-in, a required-card trial and the `pgstencil` CLI against a real cloned database. The project declares each peer at the version this workspace tests, and fails on an unmet peer. It shares this repository's Docker service state, but loads all code and SQL from installed archives. The consumer directory is printed for inspection.
 
 ## Dependencies
 
@@ -18,24 +18,25 @@ Every other dependency is private: pgstencil owns its version and applications d
 
 ### Tooling peers
 
-pgstencil's test, migration and snapshot tooling loads optional peers, so a production install leaves them out. No entry point imports them statically, and only three load them; `scripts/runtime-deps.test.mjs` and `pnpm packages:verify` fail otherwise. An application using the tooling adds the peers it needs, usually as devDependencies:
+pgstencil's test, migration, snapshot and code-generation tooling loads optional peers, so a production install leaves them out. No entry point or bin imports them statically, and only the ones below load them; `scripts/runtime-deps.test.mjs` and `pnpm packages:verify` fail otherwise. An application using the tooling adds the peers it needs, usually as devDependencies:
 
-| Entry point           | Optional peer         | Loaded when                                                                                                      |
-| --------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `pgstencil/database`  | `testcontainers`      | Local services start or reattach: `ensureServices`, `prepareTemplate`, `allocateDatabase`, `developmentDatabase` |
-| `pgstencil/database`  | `node-pg-migrate`     | `migrate` runs, including inside `allocateDatabase` and `developmentDatabase`                                    |
-| `pgstencil/testing`   | both of the above     | `createTestContext`                                                                                              |
-| `pgstencil/snapshots` | `cheerio`, `turndown` | The module is imported                                                                                           |
+| Entry point           | Optional peer         | Loaded when                                                                                                                          |
+| --------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `pgstencil/database`  | `testcontainers`      | Local services start or reattach: `ensureServices`, `prepareTemplate`, `allocateDatabase`, `developmentDatabase`                     |
+| `pgstencil/database`  | `node-pg-migrate`     | `migrate` runs, including inside `allocateDatabase` and `developmentDatabase`                                                        |
+| `pgstencil/testing`   | both of the above     | `createTestContext`                                                                                                                  |
+| `pgstencil/snapshots` | `cheerio`, `turndown` | The module is imported                                                                                                               |
+| `pgstencil` command   | `kysely-codegen`      | `pgstencil types` or `pgstencil verify` runs with a `types` entry configured; its other commands need the `pgstencil/database` peers |
 
 ```sh
-pnpm add -D testcontainers node-pg-migrate cheerio turndown
+pnpm add -D testcontainers node-pg-migrate cheerio turndown kysely-codegen
 ```
 
 Reading migration sources (`defaultMigrations`, `readMigrations`, `validateMigrations`, `appliedMigrations`) needs none of them. A release step that migrates a persistent database needs `node-pg-migrate`, which peers on `pg`, but not `testcontainers`; make it a regular dependency if that step runs from a production install. A missing peer fails with an error naming the package and the entry point that needs it. The peer ranges start at the versions pgstencil's CI tests, and pgstencil widens them as for any peer.
 
 ## Releasing
 
-The three packages share one version. A release is a pull request that raises `version` in all three `package.json` files: a patch for a fix or compatible addition, a minor for a breaking change, since these are 0.x. Nothing else triggers one.
+The three packages share one version. A release is a pull request that raises `version` in all three `package.json` files and moves [CHANGELOG.md](CHANGELOG.md)'s Unreleased entries under that version: a patch for a fix or compatible addition, a minor for a breaking change, since these are 0.x. Nothing else triggers one.
 
 After that merges, [`release.yml`](.github/workflows/release.yml) finds any version npm does not have, waits for `security-audit` to pass on that commit, and **stages** the packages from the `publish` environment, which admits only `main`. A staged package is not public. Approve each one, core first because auth and billing peer on it:
 
@@ -45,7 +46,7 @@ npm stage download <stage-id>   # `dist/provenance.json` must name the audited c
 npm stage approve <stage-id>    # asks for 2FA
 ```
 
-Each package's trusted publisher on npmjs.com names this repository, `release.yml` and the `publish` environment, and leaves "can also publish directly with `npm publish`" unchecked, so the workflow can stage but never publish. Package access is set to require 2FA and disallow tokens. Applications receive an approved release as an ordinary Renovate update. Changes that are not released yet reach an application on a branch through `pnpm pgstencil:sync`.
+Each package's trusted publisher on npmjs.com names this repository, `release.yml` and the `publish` environment, and leaves "can also publish directly with `npm publish`" unchecked, so the workflow can stage but never publish. Package access is set to require 2FA and disallow tokens. Applications receive an approved release as an ordinary Renovate update. Changes that are not released yet reach an application through the packed archives described above.
 
 Version 0.2.0 was published by hand from commit `e79cc4d`, after its audit passed.
 
@@ -53,27 +54,30 @@ Version 0.2.0 was published by hand from commit `e79cc4d`, after its audit passe
 
 Production imports use `pgstencil`, `pgstencil/postgres`, `pgstencil/diagnostics`, `@pgstencil/auth` and `@pgstencil/stripe`. Docker startup and test fixtures are opt-in imports through `pgstencil/database`, `pgstencil/testing`, and `@pgstencil/stripe/testing`; the first two need the [tooling peers](#tooling-peers).
 
-The database tooling uses the current working directory as the project root, or `PGSTENCIL_PROJECT_ROOT` when explicitly set. State goes in that project's `.pgstencil`; its Docker Compose project name derives from the project path. A project can supply `compose.yaml`, otherwise the package's bundled default is used. The default SQL directory is `migrations`, overridable by a `pgstencil.json` file containing a `migrations` directory path inside the project root; a path resolving outside it is refused. Applications composing packages should pass their complete source list explicitly:
+The database tooling uses the current working directory as the project root, or `PGSTENCIL_PROJECT_ROOT` when explicitly set. State goes in that project's `.pgstencil`; its Docker Compose project name derives from the project path. A project can supply `compose.yaml`, otherwise the package's bundled default is used. `pgstencil.json` in the project root lists the SQL sources as `migrations`: one directory or an ordered list, each inside the project root (a path resolving outside it is refused), defaulting to `migrations`. The file is validated when `pgstencil/database` is imported, and an unknown key is an error. The [CLI](README.md#change-the-schema), `defaultMigrations`, and `createTestContext()`, `allocateDatabase()` and `developmentDatabase()` without a source argument all use that list. A package's source is named by its installed path in `pgstencil.json`, or by its export in code:
 
 ```ts
-import { authMigrations } from '@pgstencil/auth/migrations';
+import { betterAuthMigrations } from '@pgstencil/auth/better-auth-migrations';
 import { billingMigrations } from '@pgstencil/stripe/migrations';
-const sources = [authMigrations, billingMigrations, applicationMigrations];
+const sources = [
+  betterAuthMigrations,
+  billingMigrations,
+  applicationMigrations,
+];
 ```
 
-Every source is an append-only ordered directory of numbered SQL files. Filenames must be globally unique; include a package/application label, such as `100_ttr_purchases.sql`. Each source's applied history must remain a prefix of that source's current files. A package can therefore introduce a new migration with a lower number than another source's already-applied migration. Pending files execute in filename order, and every applied file retains checksum protection. Test package upgrades against existing application data as well as clean initialization.
+Every source is an append-only ordered directory of numbered SQL files. Filenames must be globally unique; include a package/application label, such as `100_shop_purchases.sql`. Each source's applied history must remain a prefix of that source's current files. A package can therefore introduce a new migration with a lower number than another source's already-applied migration. Pending files execute in filename order, and every applied file retains checksum protection. Test package upgrades against existing application data as well as clean initialization.
 
-Auth reserves the existing `public.users`, `login_flows`, `login_challenges`, `sessions`, `rate_limits`, `oauth_identities`, and `oauth_flows` tables. Their original SQL bytes and names are preserved for upgrades. Billing reserves the `pgstencil_billing` schema. Application SQL must avoid those names.
-
-`Auth` accepts a `renderEmail` function for branding. `createAuthHttp` from `@pgstencil/auth/http` supplies JSON routes under `/api/auth/`, native OAuth callbacks under `/oauth/`, and a non-consuming email-link redirect under `/login/link`. The SPA confirms the link with an authenticated browser-flow POST. Session tokens stay in HttpOnly cookies; the JSON state contains the CSRF token, public session fields, and configured provider names. See the adopter's backend spec for a complete React integration.
+Auth reserves `public.user`, `session`, `account`, `verification`, `rateLimit`, `pgstencil_auth_limits` and `pgstencil_oauth_claims`. Billing reserves the `pgstencil_billing` schema. Application SQL must avoid those names.
 
 The project is MIT licensed and hosted at [diffplug/pgstencil](https://github.com/diffplug/pgstencil). Releases reach npm through trusted publishing, as described in [Releasing](#releasing). The local archives remain for trying unreleased changes; they are ordinary npm package artifacts, so moving between them and a released version needs no submodules or source-loader integration.
 
 ## Better Auth integration
 
-New applications can use `@pgstencil/auth/better-auth` and the request-scoped
-`@pgstencil/auth/better-auth-workers` adapter. The old exports remain available
-so adoption can be staged without changing already deployed auth code.
+`@pgstencil/auth` is a fixed sign-in policy on Better Auth. Node hosts import
+`createAuthApp` from `@pgstencil/auth` (or `@pgstencil/auth/better-auth`, the
+same module); Workers use the request-scoped
+`@pgstencil/auth/better-auth-workers` adapter:
 
 ```ts
 import {
@@ -87,14 +91,15 @@ type Env = BetterAuthWorkerBindings & {
   EMAIL_FROM: string;
 };
 const auth = createBetterAuthWorker<Env>({
-  appName: 'Type The Rhythm',
-  sessionPolicy: 'single', // Dormouse uses 'multiple'.
+  appName: 'Your App',
+  sessionPolicy: 'single', // Default: 'multiple'.
   accountLinking: 'same-email', // Default: 'explicit'.
   trustedEmailProviders: ['google', 'apple', 'facebook'], // Skip the extra mailbox code.
   allowMissingEmail: true, // Optional: provider-only accounts have public email: null.
   successPath: '/profile',
   errorPath: '/login',
   email: (env) => postmarkEmail(env.POSTMARK_SERVER_TOKEN, env.EMAIL_FROM),
+  emailFrom: (env) => env.EMAIL_FROM,
 });
 ```
 
@@ -104,11 +109,31 @@ bindings used by your application. Forward `/api/auth/*` and `/api/providers` to
 `AUTH_SECRET`; paired provider credentials enable OAuth. A consumer can strip
 provider bindings in its preview entry to guarantee email-only previews.
 
-Use `betterAuthMigrations` from `@pgstencil/auth/better-auth-migrations`. These
-reserve `public.user`, `session`, `account`, `verification`, `rateLimit`,
-`pgstencil_auth_limits`, and `pgstencil_oauth_claims`. An existing deployment
-retains its old migration source and adds this one; it must not drop checksum
-history. Old and new auth tables coexist, but sessions/accounts are independent.
+Use `betterAuthMigrations` from `@pgstencil/auth/better-auth-migrations`. A
+database that applied the code/link auth migrations of releases before 0.5.0
+(`001_auth.sql`, `002_oauth.sql`, `004_oauth_workers.sql`) must keep those three
+files as a source of its own, byte for byte, because the package no longer ships
+them and applied SQL stays under checksum validation; [CHANGELOG.md](CHANGELOG.md)
+has the steps.
+
+### Sign-in email
+
+The email-code message is sent through the `email` sender you inject.
+`emailFrom` sets its sender; without it the sender is
+`signin@<hostname of origin>`, so a deployment that forgets it is refused by its
+mail provider instead of sending as another domain. On Workers, `emailFrom` may
+be `(env) => env.EMAIL_FROM`. `postmarkEmail(token, from)` always sends from its
+own `from` argument, whatever the message says.
+
+`renderEmail` replaces the wording. It receives
+`{ email, otp, expiresInMinutes, appName, from }` and returns an `EmailMessage`,
+or a promise of one; `defaultSignInEmail` is the built-in renderer, which a
+custom one can call and adjust. The message must be addressed to `email` alone,
+with no `cc` or `bcc`: any other recipient, or a renderer that throws, delivers
+nothing and records an `email.delivery.failed` diagnostic. Escape every value
+you interpolate into `html` with `escapeHtml` from `pgstencil`. Better Auth
+answers a send request 200 whether or not delivery succeeded, so watch that
+diagnostic rather than the response.
 
 Node hosts use `createAuthApp({databaseUrl, origin, secret, email, ...})` and call
 `close()` before returning their database lease. Serve `app.fetch` through
@@ -127,8 +152,8 @@ for app creation and requests. Never inject it into production builds.
 
 The [working example](examples/better-auth/README.md) documents the HTTP protocol,
 security choices, native session-token storage tradeoff, test coverage and
-provider callback registration. `packages:verify` also installs and exercises
-this integration from the tarball alongside the legacy auth and Stripe packages.
+provider callback registration. `packages:verify` installs and exercises this
+integration from the tarball alongside the Stripe package.
 
 ### Account linking policies
 

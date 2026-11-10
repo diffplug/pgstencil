@@ -77,3 +77,64 @@ test('Checkout refuses payment_method_types, which the endive API versions remov
     await dev.close();
   }
 });
+
+test('subscriptions.list pages newest first with limit, starting_after and has_more, as Stripe does', async () => {
+  const time = new DevTime('2020-01-01');
+  const dev = await createStripeDev(time, new DevRandom('list-pages'));
+  try {
+    const subscribe = async (customer: string) => {
+      const session = await dev.stripe.checkout.sessions.create({
+        mode: 'subscription',
+        customer,
+        line_items: [{ price: dev.prices.monthly, quantity: 1 }],
+        payment_method_collection: 'always',
+        expires_at: Math.floor(time.now().getTime() / 1000) + 3600,
+        success_url: 'https://example.test/billing',
+      });
+      return dev.completeCheckout(session.id).id;
+    };
+    const created: string[] = [];
+    for (let i = 0; i < 25; i++) created.push(await subscribe('cus_listed'));
+    await subscribe('cus_other');
+    const newest = [...created].reverse();
+    const first = await dev.stripe.subscriptions.list({
+      customer: 'cus_listed',
+    });
+    expect(first.data.map((s) => s.id)).toEqual(newest.slice(0, 10));
+    expect(first.has_more).toBe(true);
+    const last = await dev.stripe.subscriptions.list({
+      customer: 'cus_listed',
+      limit: 10,
+      starting_after: newest[19]!,
+    });
+    expect(last.data.map((s) => s.id)).toEqual(newest.slice(20));
+    expect(last.has_more).toBe(false);
+    const exact = await dev.stripe.subscriptions.list({
+      customer: 'cus_listed',
+      limit: 5,
+      starting_after: newest[19]!,
+    });
+    expect(exact.data).toHaveLength(5);
+    expect(exact.has_more).toBe(false);
+    // The SDK's auto-pagination follows each page's last ID.
+    const all: string[] = [];
+    for await (const sub of dev.stripe.subscriptions.list({
+      customer: 'cus_listed',
+      limit: 7,
+    }))
+      all.push(sub.id);
+    expect(all).toEqual(newest);
+    for (const limit of [0, 101])
+      await expect(
+        dev.stripe.subscriptions.list({ customer: 'cus_listed', limit }),
+      ).rejects.toThrow('limit must be an integer between 1 and 100');
+    await expect(
+      dev.stripe.subscriptions.list({
+        customer: 'cus_listed',
+        starting_after: 'sub_unknown',
+      }),
+    ).rejects.toThrow('No such subscription');
+  } finally {
+    await dev.close();
+  }
+});

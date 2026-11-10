@@ -1,7 +1,7 @@
-import { fixture, login } from '../integration/helpers.ts';
+import { fixture, signUp } from './fixture-app.ts';
 const f = await fixture();
 try {
-  await login(f);
+  await signUp(f);
   process.send!({
     origin: f.app.origin,
     name: f.database.name,

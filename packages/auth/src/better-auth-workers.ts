@@ -39,10 +39,17 @@ export function createBetterAuthWorker<E extends BetterAuthWorkerBindings>(
     | 'allowMissingEmail'
     | 'rememberLoginMethod'
     | 'appName'
+    | 'renderEmail'
     | 'successPath'
     | 'errorPath'
   > & {
     email: (env: E) => EmailSender;
+    /**
+     * The default sign-in email's sender, usually read from a binding such as
+     * `(env) => env.EMAIL_FROM`. When omitted, `undefined` or blank, it is
+     * `signin@<hostname of APP_ORIGIN>`. `renderEmail` receives it as `from`.
+     */
+    emailFrom?: string | ((env: E) => string);
     /** Builds this request's hooks; their pending work is kept alive with `waitUntil`. */
     hooks?: (env: E) => AuthHooks;
   },
@@ -78,9 +85,14 @@ export function createBetterAuthWorker<E extends BetterAuthWorkerBindings>(
           ...diagnosticError(error),
         });
       }
-      const { hooks: _factory, ...rest } = options;
+      const { hooks: _factory, emailFrom: _from, ...rest } = options;
+      const emailFrom =
+        typeof options.emailFrom === 'function'
+          ? options.emailFrom(c.env)
+          : options.emailFrom;
       const auth = createAuthApp({
         ...rest,
+        ...(emailFrom === undefined ? {} : { emailFrom }),
         ...(hooks ? { hooks } : {}),
         ...(waitUntil ? { waitUntil } : {}),
         databaseUrl: c.env.HYPERDRIVE.connectionString,

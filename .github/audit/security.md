@@ -1,16 +1,26 @@
 # Domain: security
 
-**Scope — this file, and no other:**
+**Scope — these, and no others:**
 
-- `SECURITY.md`
+- `SECURITY.md`: every `FAIL IF`, and the code and tests each bullet names
+- `packages/stripe/src/`: the `Billing` class in `index.ts` and `db.ts`, and
+  the StripeDev simulator in `testing.ts` that the billing suites run against
+- `packages/stripe/migrations/`: the `pgstencil_billing` schema and its
+  `owner_access` view
+- the billing suites: `tests/integration/billing.test.ts`,
+  `tests/integration/billing-security.test.ts`,
+  `tests/integration/billing-workers.test.ts` and
+  `tests/integration/billing-http.test.ts`
 
 **Output file:** `audit-report.md`
 
 This is a code-and-policy audit of what the packed packages guarantee to a
 consuming application. Everything `SECURITY.md` assigns to the application —
 TLS, the origin gate, page CSP, secret storage, database provisioning, provider
-registration — is out of scope; so are `@pgstencil/stripe` and the original
-code/link `Auth` exports, which carry no rules yet.
+registration, and for billing the owner's authentication, CSRF on its billing
+routes, raw-body webhook delivery, Stripe key storage and the Stripe account's
+configuration — is out of scope; so is the rest of `@pgstencil/stripe` that
+`SECURITY.md` lists under "What is not defended".
 
 ## Mechanical pass
 
@@ -21,12 +31,18 @@ each bullet names.
 ```sh
 pnpm db:verify          # migrations apply and match the committed schema
 pnpm test:unit          # diagnostics allowlist and the other unit rules
-pnpm test:better-auth   # the session, CSRF, email-code, OAuth and linking suites
+pnpm exec vitest run tests/integration/better-auth.test.ts \
+  tests/integration/better-auth-workers.test.ts \
+  tests/integration/better-auth-oauth.test.ts   # the session, CSRF, email-code, OAuth and linking suites
+pnpm exec vitest run tests/integration/billing.test.ts \
+  tests/integration/billing-security.test.ts \
+  tests/integration/billing-workers.test.ts \
+  tests/integration/billing-http.test.ts   # the webhook, checkout and entitlement suites
 pnpm packages:verify    # packs, installs into a clean project, checks provenance
 ```
 
-`test:better-auth` and `packages:verify` need a working Docker daemon (see
-`compose.yaml`). If the daemon is unreachable, every check those suites pin is
+The auth suites, the billing suites and `packages:verify` need a working
+Docker daemon (see `compose.yaml`). If the daemon is unreachable, every check those suites pin is
 `UNVERIFIABLE` — say so and say why. **Never record a check as PASS on the
 strength of a test you did not run**, and never quietly skip one.
 
@@ -51,11 +67,19 @@ The remaining bullets are read rather than run:
 - The `Packed provenance` bullets are read over `scripts/build-packages.ts`,
   `scripts/pack-packages.ts` and `scripts/verify-packages.ts`, with
   `pnpm packages:verify` as the evidence.
+- The `Stripe webhooks`, `Checkout` and `Entitlement` bullets are pinned by the
+  billing suites, and each also names the `Billing` members to read in
+  `packages/stripe/src/index.ts`. Read those members in full: several clauses
+  (the tolerance, the injected clock, the order of the ledger, resync and
+  `apply`, what `synchronize` checks) are statements about the code that a
+  passing test only samples. Compare `SUBSCRIBED` with the status list in
+  `007_billing_owner_access.sql` character for character.
 
 ## Qualitative pass
 
 Be adversarial, and go past the `FAIL IF` list. Read
-`packages/auth/src/better-auth*.ts`, `packages/pgstencil/src/*.ts`, and the
+`packages/auth/src/better-auth*.ts`, `packages/pgstencil/src/*.ts`,
+`packages/stripe/src/index.ts`, `packages/stripe/migrations/*.sql`, and the
 suites under `tests/` — including what they do _not_ cover. Ask at least:
 
 - **Can a caller influence where an OAuth callback lands, or reuse state across
@@ -93,6 +117,25 @@ suites under `tests/` — including what they do _not_ cover. Ask at least:
   `pgstencil.json` migrations path, and the bundled `compose.yaml` fallback all
   cross into a child process. Look for string-built commands, unquoted
   interpolation, and a path that escapes the project root.
+- **Can anything from a webhook body reach a billing table, or grant access?**
+  Follow every read of `event` in `webhook` and `completedCheckout` in
+  `packages/stripe/src/index.ts`. The body may choose whose state to resync and
+  which row `context.subscription` reads back; anything more — a status, a
+  period end, a Price, an owner taken from metadata — is the finding.
+- **Can one owner end up with two chargeable subscriptions, a second trial, or
+  another owner's Checkout?** Trace `checkout` through `account`, `customer`,
+  `reconcile`, the locked transaction and the Stripe call made after it
+  commits, and `cancelCheckout` and `replace` racing a completion in Stripe.
+  Check that every Stripe write is either keyed by a value committed first or
+  safe to repeat.
+- **Does a billing error path leak?** `verifyWebhook` puts the Stripe SDK's
+  message into the `BillingError` an adapter may return to the sender; follow
+  every error `webhook` raises to `diagnostic`, and look for a path that
+  serializes a body, a header, a secret or a message.
+- **Does a billing test pin what its bullet claims, or only what StripeDev
+  allows?** `packages/stripe/src/testing.ts` is a simplified Stripe; a test
+  whose assertion holds only because the simulator cannot produce the bad case
+  leaves its clause unenforced.
 - **What do the integration tests not cover?** Name the gaps. A guarantee whose
   only evidence is that nobody has attacked it is worth saying out loud.
 - **Have `SECURITY.md` and the code drifted?** Say which side is wrong. A bullet

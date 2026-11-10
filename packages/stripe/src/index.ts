@@ -973,6 +973,8 @@ export class Billing<P extends string = string> {
         body,
         signature,
         this.config.webhookSecret,
+        // Seconds between the delivery's signed `t=` (Stripe signs every
+        // attempt afresh, so retries pass) and the injected clock.
         300,
         Stripe.createSubtleCryptoProvider(),
         this.time.now().getTime(),

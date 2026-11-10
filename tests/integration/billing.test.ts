@@ -429,6 +429,36 @@ billingTest(
 );
 
 billingTest(
+  'the five-minute tolerance reads the delivery signature: a retry signed hours later applies once, an old signature never',
+  async ({ f }) => {
+    const { session } = await f.start();
+    f.dev.completeCheckout(session.id);
+    const event = f.dev.events[0]!;
+    const first = f.dev.signed(event);
+    // Accepted at the tolerance's edge, then refused one second past it.
+    f.time.advanceMilliseconds(300_000);
+    await f.billing.webhook(first.body, first.signature);
+    f.time.advanceMilliseconds(1000);
+    await expect(
+      f.billing.webhook(first.body, first.signature),
+    ).rejects.toThrow('Timestamp');
+    // Stripe signs each delivery attempt when it sends it, so a retry of an
+    // hours-old event carries a fresh timestamp; the ledger makes it a no-op.
+    f.time.advanceHours(5);
+    const retry = f.dev.signed(event);
+    await f.billing.webhook(retry.body, retry.signature);
+    const ledger = await f.billing.db
+      .selectFrom('events')
+      .select(['id', 'attempts', 'failed'])
+      .execute();
+    expect(ledger.map((e) => [e.id, e.attempts, e.failed])).toEqual([
+      [event.id, 1, false],
+    ]);
+    expect((await f.billing.status('alice')).access).toBe(true);
+  },
+);
+
+billingTest(
   'expired and canceled checkouts can be replaced without spending the trial',
   async ({ f }) => {
     const first = await f.start();

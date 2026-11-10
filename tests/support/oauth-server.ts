@@ -7,12 +7,30 @@ import {
   generateKeyPairSync,
   sign,
 } from 'node:crypto';
-import type { OAuthFetch } from '../../examples/login/src/oauth-providers.ts';
 import type {
   Provider,
   OAuthSettings,
 } from '../../packages/auth/src/better-auth-oauth.ts';
 
+/** A fetch-shaped OAuth client transport: a string URL and complete options. */
+type OAuthFetch = (
+  url: string,
+  options: {
+    body:
+      | ArrayBuffer
+      | null
+      | ReadableStream
+      | string
+      | Uint8Array
+      | undefined
+      | URLSearchParams;
+    duplex?: 'half';
+    headers: Record<string, string>;
+    method: string;
+    redirect: 'manual';
+    signal?: AbortSignal;
+  },
+) => Promise<Response>;
 export const allOAuthCredentials = {
   google: {
     clientId: 'test-google-client',

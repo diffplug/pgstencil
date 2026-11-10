@@ -10,6 +10,9 @@
     "./postgres": "./src/postgres.ts",
     "./diagnostics": "./src/diagnostics.ts"
   },
+  "bin": {
+    "pgstencil": "./src/cli.ts"
+  },
   "dependencies": {
     "pg": "^8.23.1"
   },
@@ -18,7 +21,8 @@
     "node-pg-migrate": "^9.0.0",
     "testcontainers": "^12.2.1",
     "cheerio": "^1.2.0",
-    "turndown": "^7.2.4"
+    "turndown": "^7.2.4",
+    "kysely-codegen": "^0.20.0"
   },
   "peerDependenciesMeta": {
     "node-pg-migrate": {
@@ -32,6 +36,9 @@
     },
     "turndown": {
       "optional": true
+    },
+    "kysely-codegen": {
+      "optional": true
     }
   },
   "devDependencies": {
@@ -39,7 +46,8 @@
     "node-pg-migrate": "^9.0.0",
     "testcontainers": "^12.2.1",
     "cheerio": "^1.2.0",
-    "turndown": "^7.2.4"
+    "turndown": "^7.2.4",
+    "kysely-codegen": "^0.20.0"
   },
   "engines": {
     "node": ">=24"
@@ -76,6 +84,9 @@
         "types": "./dist/diagnostics.d.ts",
         "import": "./dist/diagnostics.js"
       }
+    },
+    "bin": {
+      "pgstencil": "./dist/cli.js"
     }
   },
   "description": "Postgres schema migrations, isolated test databases, and deterministic snapshot testing for TypeScript.",

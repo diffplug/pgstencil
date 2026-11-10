@@ -6,7 +6,12 @@ export default defineConfig({
     hookTimeout: 120000,
     maxWorkers: 4,
     update: process.env.PGSTENCIL_UPDATE === '1' ? 'all' : 'none',
-    forceRerunTriggers: ['**/packages/*/migrations/*.sql', '**/compose.yaml'],
+    forceRerunTriggers: [
+      '**/packages/*/migrations/*.sql',
+      '**/packages/auth/better-auth-migrations/*.sql',
+      '**/tests/fixtures/migrations/*.sql',
+      '**/compose.yaml',
+    ],
     sequence: { concurrent: false },
   },
 });

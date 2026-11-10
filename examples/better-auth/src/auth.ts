@@ -1,7 +1,13 @@
-import { createAuthApp } from '@pgstencil/auth/better-auth';
-export { authOptions } from '@pgstencil/auth/better-auth';
-export function createEmailApp(options: Parameters<typeof createAuthApp>[0]) {
+import { createAuthApp, type AuthAppOptions } from '@pgstencil/auth';
+import { addBillingRoutes, type BillingOptions } from './billing.ts';
+export { authOptions } from '@pgstencil/auth';
+export type ExampleOptions = AuthAppOptions & {
+  /** Adds the billing demo; without it the example only signs in. */
+  billing?: BillingOptions;
+};
+export function createEmailApp({ billing, ...options }: ExampleOptions) {
   const result = createAuthApp(options);
+  if (billing) addBillingRoutes(result, options.origin, billing);
   result.app.get('/auth.js', (c) =>
     c.body(loginScript, 200, {
       'content-type': 'text/javascript; charset=utf-8',

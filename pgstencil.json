@@ -1,3 +1,14 @@
 {
-  "migrations": "packages/auth/migrations"
+  "migrations": [
+    "packages/auth/better-auth-migrations",
+    "packages/stripe/migrations"
+  ],
+  "schema": "examples/better-auth/schema.sql",
+  "types": [
+    {
+      "out": "packages/stripe/src/db.generated.ts",
+      "include": "pgstencil_billing.*",
+      "defaultSchema": "pgstencil_billing"
+    }
+  ]
 }

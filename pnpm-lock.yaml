@@ -181,9 +181,6 @@ importers:
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2
-      kysely-codegen:
-        specifier: ^0.20.0
-        version: 0.20.0(kysely@0.29.8)(pg@8.23.1)(typescript@7.0.2)
       miniflare:
         specifier: 5.20260908.0-alpha
         version: 5.20260908.0-alpha
@@ -214,37 +211,12 @@ importers:
       '@pgstencil/auth':
         specifier: workspace:*
         version: link:../../packages/auth
-      better-auth:
-        specifier: 1.7.18
-        version: 1.7.18(pg@8.23.1)(vitest@5.1.0(@types/node@24.19.2)(vite@8.2.2(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)))
-      hono:
-        specifier: ^4.13.7
-        version: 4.13.16
-      kysely:
-        specifier: ^0.29.5
-        version: 0.29.8
-      pg:
-        specifier: ^8.16.0
-        version: 8.23.1
-      pgstencil:
-        specifier: workspace:*
-        version: link:../../packages/pgstencil
-    devDependencies:
-      node-pg-migrate:
-        specifier: ^9.0.0
-        version: 9.0.0(@types/pg@8.23.1)(pg@8.23.1)
-      testcontainers:
-        specifier: ^12.2.1
-        version: 12.2.1(supports-color@10.2.2)
-
-  examples/login:
-    dependencies:
-      '@pgstencil/auth':
-        specifier: workspace:*
-        version: link:../../packages/auth
       '@pgstencil/stripe':
         specifier: workspace:*
         version: link:../../packages/stripe
+      better-auth:
+        specifier: 1.7.18
+        version: 1.7.18(pg@8.23.1)(vitest@5.1.0(@types/node@24.19.2)(vite@8.2.2(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)))
       hono:
         specifier: ^4.13.7
         version: 4.13.16
@@ -268,21 +240,6 @@ importers:
         specifier: ^12.2.1
         version: 12.2.1(supports-color@10.2.2)
 
-  examples/workers:
-    dependencies:
-      '@pgstencil/auth':
-        specifier: workspace:*
-        version: link:../../packages/auth
-      hono:
-        specifier: ^4.13.7
-        version: 4.13.16
-      kysely:
-        specifier: ^0.29.5
-        version: 0.29.8
-      pgstencil:
-        specifier: workspace:*
-        version: link:../../packages/pgstencil
-
   packages/auth:
     dependencies:
       better-auth:
@@ -291,9 +248,6 @@ importers:
       jose:
         specifier: ^6.2.15
         version: 6.2.15
-      openid-client:
-        specifier: ^6.8.9
-        version: 6.8.9
     devDependencies:
       hono:
         specifier: ^4.13.7
@@ -317,6 +271,9 @@ importers:
       kysely:
         specifier: ^0.29.5
         version: 0.29.8
+      kysely-codegen:
+        specifier: ^0.20.0
+        version: 0.20.0(kysely@0.29.8)(pg@8.23.1)(typescript@7.0.2)
       node-pg-migrate:
         specifier: ^9.0.0
         version: 9.0.0(@types/pg@8.23.1)(pg@8.23.1)
@@ -2241,9 +2198,6 @@ packages:
   nth-check@2.1.1:
     resolution: {integrity: sha512-lqjrjmaOoAnWfMmBPL+XNnynZh2+swxiX3WUE0s4yEHI6m+AwrK2UZOimIRl3X/4QctVqS8AiZjFqyOGrMXb/w==}
 
-  oauth4webapi@3.8.8:
-    resolution: {integrity: sha512-8N28E+a/oxfXWBgOMt+ZP/JUf/XR+IFbvkAEPP3gznXOMv9BpAAwiIj0TFNz3tGTPc0ZQ8zmWBNgN1nAys0gng==}
-
   object-inspect@1.13.4:
     resolution: {integrity: sha512-W67iLl4J2EXEGTbfeHCffrjDfitvLANg0UlX3wFUUSTx92KXRFegMHUVgSqE+wvhAbi4WqjGg9czysTV2Epbew==}
     engines: {node: '>= 0.4'}
@@ -2254,9 +2208,6 @@ packages:
 
   once@1.4.0:
     resolution: {integrity: sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==}
-
-  openid-client@6.8.9:
-    resolution: {integrity: sha512-6mXMRNJxDOf6BflEWLXul1UwzLFz++9Ofz1PYwPwwsJsyXBsbfkO+Jo255SW1qnFNLYz4EJWHz42X4OJJrya/g==}
 
   package-json-from-dist@1.0.1:
     resolution: {integrity: sha512-UEZIS3/by4OC8vL3P2dTXRETpebLI2NiI5vIrjaD/5UtrkFX/tNbwjTSRAGC/+7CAo2pIcBaRgWmcBBHcsaCIw==}
@@ -4321,8 +4272,6 @@ snapshots:
     dependencies:
       boolbase: 1.0.0
 
-  oauth4webapi@3.8.8: {}
-
   object-inspect@1.13.4: {}
 
   obug@3.0.0: {}
@@ -4330,11 +4279,6 @@ snapshots:
   once@1.4.0:
     dependencies:
       wrappy: 1.0.2
-
-  openid-client@6.8.9:
-    dependencies:
-      jose: 6.2.15
-      oauth4webapi: 3.8.8
 
   package-json-from-dist@1.0.1: {}
 

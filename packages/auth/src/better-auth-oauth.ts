@@ -30,9 +30,10 @@ export type OAuthSettings = Partial<
   Record<Provider, { clientId: string; clientSecret: string }>
 >;
 
-/** Pin the redirect flow's OIDC checks explicitly on Better Auth 1.7.3.
- * Its Google/Apple/Microsoft provider metadata supports verification, but their default
- * redirect getUserInfo only decodes claims. Use the library's actual verifier.
+/** Pin the redirect flow's OIDC checks explicitly. Better Auth's
+ * Google/Apple/Microsoft provider metadata supports verification, but their default
+ * redirect getUserInfo only decoded claims when this was written (1.7.3). Use the
+ * library's actual verifier whatever the pinned release does by default.
  */
 export const verifiedOidc: BetterAuthPlugin = {
   id: 'pgstencil-verified-oidc',
@@ -68,8 +69,8 @@ export const verifiedOidc: BetterAuthPlugin = {
       if (provider.idToken && 'jwks' in provider.idToken) {
         provider.idToken.algorithms = ['RS256'];
         if (provider.id === 'microsoft') {
-          // Microsoft omits JWK.alg. Better Auth 1.7.3 passes that missing value
-          // to importJWK, which throws. JOSE selects/imports the key using the
+          // Microsoft omits JWK.alg. Better Auth passed that missing value to
+          // importJWK, which throws (seen in 1.7.3). JOSE selects/imports the key using the
           // protected header; the verifier still permits only RS256 above.
           provider.idToken.jwks = createRemoteJWKSet(
             new URL(

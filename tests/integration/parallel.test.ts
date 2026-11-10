@@ -1,7 +1,7 @@
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { test, expect } from 'vitest';
-import { fixture, begin, post, type Fixture } from './helpers.ts';
+import { fixture, signUp, type Fixture } from '../support/fixture-app.ts';
 import { captureEmail } from '../../packages/pgstencil/src/snapshots.ts';
 
 test('twenty live applications isolate ports, databases, time, random state and email', async ({
@@ -20,13 +20,16 @@ test('twenty live applications isolate ports, databases, time, random state and 
   expect(new Set(apps.map((f) => f.app.origin)).size).toBe(20);
   expect(new Set(apps.map((f) => f.database.name)).size).toBe(20);
   expect(new Set(apps.map((f) => f.database.hash)).size).toBe(1);
-  const flows = await Promise.all(apps.map((f) => begin(f)));
-  // Same inputs produce the same email and tokens regardless of scheduling.
+  const signups = await Promise.all(apps.map((f) => signUp(f)));
+  // Same inputs produce the same email and IDs regardless of scheduling.
   expect(
     new Set(
-      flows.map((flow, i) => captureEmail(flow.message, apps[i]!.app.origin)),
+      signups.map((signup, i) =>
+        captureEmail(signup.message, apps[i]!.app.origin),
+      ),
     ).size,
   ).toBe(1);
+  expect(new Set(signups.map((signup) => signup.user.id)).size).toBe(1);
   apps[0]!.time.advanceHours(24);
   apps[0]!.random.bytes(100);
   expect(apps[1]!.time.now().toISOString()).toBe('2020-01-01T00:00:00.000Z');
@@ -42,22 +45,33 @@ test('twenty live applications isolate ports, databases, time, random state and 
         })
         .execute();
       expect(
-        await f.app.db.selectFrom('users').select('email').execute(),
-      ).toEqual([{ email: `user${i}@example.test` }]);
+        await f.app.db
+          .selectFrom('users')
+          .select('email')
+          .orderBy('email')
+          .execute(),
+      ).toEqual([
+        { email: 'alice@example.test' },
+        { email: `user${i}@example.test` },
+      ]);
       f.email.assertNoUnread();
       expect(f.email.all()).toHaveLength(1);
     }),
   );
-  const flow = flows[1]!;
-  await post(
-    apps[1]!,
-    '/login/code',
-    { csrf: flow.csrf, code: flow.code },
-    flow.pendingCookie,
-  ).expect(303);
+  await signUp(apps[1]!, 'bob@example.test');
   expect(
-    await apps[0]!.app.db.selectFrom('sessions').selectAll().execute(),
+    (await apps[1]!.client.get('/users').expect(200)).body.map(
+      (user: { email: string }) => user.email,
+    ),
+  ).toEqual(['alice@example.test', 'bob@example.test', 'user1@example.test']);
+  expect(
+    await apps[0]!.app.db
+      .selectFrom('users')
+      .select('email')
+      .where('email', '=', 'bob@example.test')
+      .execute(),
   ).toEqual([]);
+  expect(apps[0]!.email.all()).toHaveLength(1);
   console.info(
     `20 concurrent apps, isolated writes and email: ${Math.round(performance.now() - started)}ms`,
   );

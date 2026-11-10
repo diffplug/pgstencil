@@ -8,7 +8,7 @@ import {
 } from 'miniflare';
 import { createTestContext } from '../../packages/pgstencil/src/testing.ts';
 import { createStripeDev } from '../../packages/stripe/src/testing.ts';
-import { appMigrations } from '../../examples/login/src/migrations.ts';
+import { billingMigrations } from '../../packages/stripe/src/migrations.ts';
 
 const origin = 'https://worker.example.test';
 const bundle = build({
@@ -30,7 +30,7 @@ const bundle = build({
 });
 
 test('Billing in workerd: fetch client, Web Crypto webhooks, founding offer and purchase counts', async () => {
-  const context = await createTestContext({ migrations: appMigrations });
+  const context = await createTestContext({ migrations: billingMigrations });
   const dev = await createStripeDev(context.time, context.random, undefined, {
     recurring: { price_founding_50: 'year', price_founding_60: 'year' },
   });

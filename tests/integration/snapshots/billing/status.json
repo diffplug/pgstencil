@@ -1,0 +1,20 @@
+{
+  "access": true,
+  "accessUntil": "2020-01-15T00:00:00.000Z",
+  "plan": "yearly",
+  "subscription": {
+    "cancel_at_period_end": false,
+    "end_reason": null,
+    "ended_at": null,
+    "id": "sub_w7C3rfCJSeBMAUHt",
+    "owner_id": "jqA6VlbZ1K4GrKS9aUQe7FgrckZrZA0M",
+    "period_end": "2020-01-15T00:00:00.000Z",
+    "price_id": "price_dev_yearly",
+    "started_at": "2020-01-01T00:00:00.000Z",
+    "status": "trialing",
+    "trial_end": "2020-01-15T00:00:00.000Z",
+    "updated_at": "2020-01-01T00:00:00.000Z"
+  },
+  "trialDays": 0,
+  "trialEligible": false
+}

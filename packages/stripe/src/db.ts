@@ -1,5 +1,19 @@
-import type { ColumnType, Generated } from 'kysely';
+import type {
+  ColumnType,
+  Generated,
+  InsertType,
+  SelectType,
+  UpdateType,
+} from 'kysely';
+import type { DB as Migrated } from './db.generated.ts';
 type Timestamp = ColumnType<Date, Date | string, Date | string>;
+/**
+ * The billing schema as consumers see it. Written by hand so its columns carry
+ * documentation and the `owner_access` view keeps the non-null columns
+ * Postgres cannot declare for a view. `db.generated.ts`, generated from the
+ * migrations by `pgstencil types` and checked by `pgstencil verify`, keeps it
+ * honest: `BillingDBMatchesMigrations` below fails typechecking on any drift.
+ */
 export interface BillingDB {
   accounts: {
     owner_id: string;
@@ -61,3 +75,39 @@ export interface BillingDB {
     failed: Generated<boolean>;
   };
 }
+
+type Same<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
+    ? true
+    : false;
+/** Views whose hand-written columns may be narrower than what Postgres reports. */
+type Views = 'owner_access';
+/** A column as Kysely uses it: what a select returns, an insert takes, an update takes. */
+type Facets<T> = [SelectType<T>, InsertType<T>, UpdateType<T>];
+/** `true` where a column agrees; otherwise both types, so the error names it. */
+type Agreement<Table, Hand, Generated> = (
+  Table extends Views
+    ? [SelectType<Hand>] extends [SelectType<Generated>]
+      ? true
+      : false
+    : Same<Facets<Hand>, Facets<Generated>>
+) extends true
+  ? true
+  : { BillingDB: Hand; 'db.generated.ts': Generated };
+type Columns<Table, Hand, Generated> = {
+  [Column in keyof Hand | keyof Generated]: Column extends keyof Hand
+    ? Column extends keyof Generated
+      ? Agreement<Table, Hand[Column], Generated[Column]>
+      : 'column missing from db.generated.ts'
+    : 'column missing from BillingDB';
+};
+type Drift = {
+  [Table in keyof BillingDB | keyof Migrated]: Table extends keyof BillingDB
+    ? Table extends keyof Migrated
+      ? Columns<Table, BillingDB[Table], Migrated[Table]>
+      : 'table missing from db.generated.ts'
+    : 'table missing from BillingDB';
+};
+type Agrees<T extends Record<string, Record<string, true>>> = T;
+// Never used: checking the constraint is the point. `pnpm typecheck` runs it.
+type BillingDBMatchesMigrations = Agrees<Drift>;

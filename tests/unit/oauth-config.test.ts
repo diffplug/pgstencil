@@ -1,8 +1,5 @@
 import { expect, test } from 'vitest';
-import {
-  oauthFromEnvironment,
-  OAuthProviders,
-} from '../../examples/login/src/oauth-providers.ts';
+import { oauthFromEnvironment } from '../../packages/auth/src/better-auth-oauth.ts';
 
 test('OAuth configuration is optional and requires complete credentials for each enabled provider', () => {
   expect(oauthFromEnvironment({})).toEqual({});
@@ -13,8 +10,13 @@ test('OAuth configuration is optional and requires complete credentials for each
     oauthFromEnvironment({
       GOOGLE_CLIENT_ID: 'client',
       GOOGLE_CLIENT_SECRET: 'secret',
+      MICROSOFT_CLIENT_ID: 'ms-client',
+      MICROSOFT_CLIENT_SECRET: 'ms-secret',
     }),
-  ).toEqual({ google: { clientId: 'client', clientSecret: 'secret' } });
+  ).toEqual({
+    google: { clientId: 'client', clientSecret: 'secret' },
+    microsoft: { clientId: 'ms-client', clientSecret: 'ms-secret' },
+  });
   expect(() => oauthFromEnvironment({ GITHUB_CLIENT_ID: 'client' })).toThrow(
     'Set both GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET',
   );
@@ -27,8 +29,4 @@ test('OAuth configuration is optional and requires complete credentials for each
       GOOGLE_CLIENT_SECRET: 'secret',
     }),
   ).toThrow();
-  expect(
-    () =>
-      new OAuthProviders({ github: { clientId: 'client', clientSecret: '' } }),
-  ).toThrow('GitHub requires');
 });

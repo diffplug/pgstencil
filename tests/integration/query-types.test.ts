@@ -7,18 +7,21 @@ import {
   projectRoot,
   queryDatabase,
 } from '../../packages/pgstencil/src/database.ts';
-import { generateTypes } from '../../scripts/generate-types.ts';
+import { generateTypes } from '../../packages/pgstencil/src/codegen.ts';
+import { fixtureMigrations } from '../support/fixture-app.ts';
 
 test('regenerated types include new tables and make renamed-column queries fail compilation', async ({
   onTestFinished,
 }) => {
-  const lease = await allocateDatabase();
+  const lease = await allocateDatabase(fixtureMigrations);
   onTestFinished(() => lease.close());
-  const consumerState = join(projectRoot, 'examples/login/.pgstencil');
+  // A workspace package directory, so the generated file resolves kysely.
+  const consumerState = join(projectRoot, 'examples/better-auth/.pgstencil');
   await mkdir(consumerState, { recursive: true });
   const directory = await mkdtemp(join(consumerState, 'types-'));
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
   const definitions = join(directory, 'db.ts');
+  const target = { out: definitions, include: 'public.*' };
   const query = join(directory, 'query.ts');
   await writeFile(
     query,
@@ -55,14 +58,22 @@ test('regenerated types include new tables and make renamed-column queries fail 
       throw new Error(`TypeScript exited with ${result.status}: ${output}`);
     return errors;
   };
-  await generateTypes(lease.url, definitions);
+  await generateTypes(lease.url, target);
   expect(diagnostics()).toEqual([]);
+  // pgstencil's bookkeeping tables are never an application's types.
+  expect(await readFile(definitions, 'utf8')).not.toMatch(
+    /pgmigrations|pgstencil_migration_files/,
+  );
   await queryDatabase(
     lease.url,
     'ALTER TABLE users RENAME COLUMN email TO primary_email; CREATE TABLE profiles (id text PRIMARY KEY)',
   );
-  await generateTypes(lease.url, definitions);
+  await expect(generateTypes(lease.url, target, true)).rejects.toThrow(
+    'is stale; run pgstencil types',
+  );
+  await generateTypes(lease.url, target);
   expect(await readFile(definitions, 'utf8')).toContain('profiles: Profiles');
+  await expect(generateTypes(lease.url, target, true)).resolves.toBe(false);
   const errors = diagnostics();
   expect(errors).toHaveLength(1);
   expect(errors[0]).toContain('"email"');

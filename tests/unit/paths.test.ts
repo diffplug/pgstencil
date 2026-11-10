@@ -7,9 +7,9 @@ test('pgstencil.json migrations path must stay inside the project root', () => {
   expect(migrationsDirectory(root, 'migrations')).toBe(
     join(root, 'migrations'),
   );
-  expect(migrationsDirectory(root, 'packages/auth/migrations')).toBe(
-    join(root, 'packages/auth/migrations'),
-  );
+  expect(
+    migrationsDirectory(root, 'packages/auth/better-auth-migrations'),
+  ).toBe(join(root, 'packages/auth/better-auth-migrations'));
   expect(migrationsDirectory(root, './db/../sql')).toBe(join(root, 'sql'));
   expect(migrationsDirectory(root, '..migrations')).toBe(
     join(root, '..migrations'),

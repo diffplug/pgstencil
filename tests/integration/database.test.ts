@@ -6,20 +6,20 @@ import {
   allocateDatabase,
   queryDatabase,
   readMigrations,
-  defaultMigrations,
   validateMigrations,
   migrate,
   prepareTemplate,
 } from '../../packages/pgstencil/src/database.ts';
+import { fixtureMigrations } from '../support/fixture-app.ts';
 
 test('shared SQL sources upgrade independently while each history stays append-only', async ({
   onTestFinished,
 }) => {
   const directory = await mkdtemp(join(tmpdir(), 'pgstencil-sources-'));
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
-  const shared = join(directory, 'auth');
+  const shared = join(directory, 'package');
   const application = join(directory, 'application');
-  await cp(defaultMigrations, shared, { recursive: true });
+  await cp(fixtureMigrations, shared, { recursive: true });
   await mkdir(application);
   await writeFile(
     join(application, '100_domain.sql'),
@@ -39,7 +39,7 @@ test('shared SQL sources upgrade independently while each history stays append-o
       ),
     ) + 1;
   await writeFile(
-    join(shared, `${String(next).padStart(3, '0')}_auth_display.sql`),
+    join(shared, `${String(next).padStart(3, '0')}_package_display.sql`),
     '-- Up Migration\nALTER TABLE users ADD COLUMN display_name text;\n-- Down Migration\nALTER TABLE users DROP COLUMN display_name;',
   );
   await migrate(lease.url, await readMigrations(sources));
@@ -61,8 +61,8 @@ test('shared SQL sources upgrade independently while each history stays append-o
   );
 });
 test('warm templates produce isolated writable databases', async () => {
-  const a = await allocateDatabase();
-  const b = await allocateDatabase();
+  const a = await allocateDatabase(fixtureMigrations);
+  const b = await allocateDatabase(fixtureMigrations);
   try {
     expect(a.name).not.toBe(b.name);
     expect(a.hash).toBe(b.hash);
@@ -71,8 +71,8 @@ test('warm templates produce isolated writable databases', async () => {
       "INSERT INTO users VALUES ('a','alice@example.test','2020-01-01')",
     );
     expect(await queryDatabase(b.url, 'SELECT * FROM users')).toEqual([]);
-    expect((await prepareTemplate()).hash).toBe(a.hash);
-    const files = await readMigrations(defaultMigrations);
+    expect((await prepareTemplate(fixtureMigrations)).hash).toBe(a.hash);
+    const files = await readMigrations(fixtureMigrations);
     await validateMigrations(a.url, files);
     const changed = files.map((f) => ({ ...f, hash: 'changed' }));
     await expect(validateMigrations(a.url, changed)).rejects.toThrow(
@@ -93,8 +93,8 @@ test('SQL upgrades preserve data and failed template initialization is recoverab
   const directory = await mkdtemp(join(tmpdir(), 'pgstencil-upgrade-'));
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
   await writeFile(
-    join(directory, '001_auth.sql'),
-    await readFile(join(defaultMigrations, '001_auth.sql')),
+    join(directory, '001_users.sql'),
+    await readFile(join(fixtureMigrations, '001_users.sql')),
   );
   const existing = await allocateDatabase(directory);
   onTestFinished(() => existing.close());
@@ -140,42 +140,4 @@ test('SQL upgrades preserve data and failed template initialization is recoverab
   expect(await queryDatabase(existing.url, 'SELECT email FROM users')).toEqual([
     { email: 'returning@example.test' },
   ]);
-});
-
-test('OAuth migration preserves existing email accounts and sessions', async ({
-  onTestFinished,
-}) => {
-  const directory = await mkdtemp(join(tmpdir(), 'pgstencil-oauth-upgrade-'));
-  onTestFinished(() => rm(directory, { recursive: true, force: true }));
-  await writeFile(
-    join(directory, '001_auth.sql'),
-    await readFile(join(defaultMigrations, '001_auth.sql')),
-  );
-  const database = await allocateDatabase(directory);
-  onTestFinished(() => database.close());
-  await queryDatabase(
-    database.url,
-    "INSERT INTO users VALUES ('existing', 'returning@example.test', '2020-01-01')",
-  );
-  await queryDatabase(
-    database.url,
-    "INSERT INTO sessions VALUES ('existing-token-hash', 'existing', 'csrf-hash', '2020-01-01', '2020-01-02', NULL)",
-  );
-  const before = await queryDatabase(
-    database.url,
-    'SELECT * FROM sessions JOIN users ON users.id = sessions.user_id',
-  );
-  await migrate(database.url, await readMigrations(defaultMigrations));
-  expect(
-    await queryDatabase(
-      database.url,
-      'SELECT * FROM sessions JOIN users ON users.id = sessions.user_id',
-    ),
-  ).toEqual(before);
-  expect(
-    await queryDatabase(database.url, 'SELECT * FROM oauth_identities'),
-  ).toEqual([]);
-  expect(
-    await queryDatabase(database.url, 'SELECT * FROM oauth_flows'),
-  ).toEqual([]);
 });

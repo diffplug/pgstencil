@@ -4,17 +4,6 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./migrations": "./src/migrations.ts",
-    "./auth": "./src/auth.ts",
-    "./security": "./src/security.ts",
-    "./oauth": "./src/oauth.ts",
-    "./oauth-providers": "./src/oauth-providers.ts",
-    "./db.generated": "./src/db.generated.ts",
-    "./email": "./src/email.ts",
-    "./http": "./src/http.ts",
-    "./fetch": "./src/fetch.ts",
-    "./hono": "./src/hono.ts",
-    "./workers": "./src/workers.ts",
     "./postmark": "./src/postmark.ts",
     "./better-auth": "./src/better-auth.ts",
     "./better-auth-oauth": "./src/better-auth-oauth.ts",
@@ -24,8 +13,7 @@
   },
   "dependencies": {
     "better-auth": "1.7.18",
-    "jose": "^6.2.15",
-    "openid-client": "^6.8.9"
+    "jose": "^6.2.15"
   },
   "peerDependencies": {
     "hono": "^4.13.7",
@@ -42,7 +30,6 @@
   },
   "files": [
     "dist",
-    "migrations",
     "LICENSE",
     "better-auth-migrations"
   ],
@@ -52,50 +39,6 @@
       ".": {
         "types": "./dist/index.d.ts",
         "import": "./dist/index.js"
-      },
-      "./migrations": {
-        "types": "./dist/migrations.d.ts",
-        "import": "./dist/migrations.js"
-      },
-      "./auth": {
-        "types": "./dist/auth.d.ts",
-        "import": "./dist/auth.js"
-      },
-      "./security": {
-        "types": "./dist/security.d.ts",
-        "import": "./dist/security.js"
-      },
-      "./oauth": {
-        "types": "./dist/oauth.d.ts",
-        "import": "./dist/oauth.js"
-      },
-      "./oauth-providers": {
-        "types": "./dist/oauth-providers.d.ts",
-        "import": "./dist/oauth-providers.js"
-      },
-      "./db.generated": {
-        "types": "./dist/db.generated.d.ts",
-        "import": "./dist/db.generated.js"
-      },
-      "./email": {
-        "types": "./dist/email.d.ts",
-        "import": "./dist/email.js"
-      },
-      "./http": {
-        "types": "./dist/http.d.ts",
-        "import": "./dist/http.js"
-      },
-      "./fetch": {
-        "types": "./dist/fetch.d.ts",
-        "import": "./dist/fetch.js"
-      },
-      "./hono": {
-        "types": "./dist/hono.d.ts",
-        "import": "./dist/hono.js"
-      },
-      "./workers": {
-        "types": "./dist/workers.d.ts",
-        "import": "./dist/workers.js"
       },
       "./postmark": {
         "types": "./dist/postmark.d.ts",

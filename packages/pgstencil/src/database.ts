@@ -27,6 +27,12 @@ export {
   projectRoot,
   stateDirectory,
   defaultMigrations,
+  projectConfig,
+  parseConfig,
+  readConfig,
+  configFileName,
+  type ProjectConfig,
+  type TypesTarget,
 } from './paths.ts';
 export interface Services {
   project: string;

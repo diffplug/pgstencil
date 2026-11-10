@@ -1113,6 +1113,75 @@ billingTest(
   },
 );
 
+billingTest(
+  'reconcileAll walks every owner with a customer and reports exactly the owners a missed event left stale',
+  async ({ f }) => {
+    const subs: Record<string, string> = {};
+    for (const owner of ['alice', 'bob', 'carol', 'dave']) {
+      const { session } = await f.start('monthly', owner);
+      subs[owner] = f.dev.completeCheckout(session.id).id;
+    }
+    await f.deliver();
+    // An account without a customer has nothing in Stripe to compare.
+    await f.billing.account('erin', 'erin@example.test');
+    // Stripe ends alice's subscription and bob schedules his cancellation in
+    // the portal, but neither webhook arrives.
+    f.dev.transition(subs.alice!, 'cancel');
+    f.dev.transition(subs.bob!, 'portal-cancel');
+    f.dev.events.length = 0;
+    const stored = async (owner: string) => {
+      const { subscription, access } = await f.billing.status(owner);
+      return `${subscription!.status}:${subscription!.cancel_at_period_end}:${access}`;
+    };
+    const summary = (change: {
+      before: { status: string; cancel_at_period_end: boolean }[];
+      after: { status: string; cancel_at_period_end: boolean }[];
+    }) =>
+      [change.before, change.after]
+        .map((rows) =>
+          rows.map((r) => `${r.status}:${r.cancel_at_period_end}`).join(),
+        )
+        .join(' -> ');
+
+    // A page of one owner walks every page; a dry run writes nothing.
+    const dry = await f.billing.reconcileAll({ dryRun: true, pageSize: 1 });
+    expect(dry.checked).toBe(4);
+    expect(dry.failed).toEqual([]);
+    expect(dry.changed.map((c) => c.ownerId)).toEqual(['alice', 'bob']);
+    expect(dry.changed.map(summary)).toEqual([
+      'trialing:false -> canceled:false',
+      'trialing:false -> trialing:true',
+    ]);
+    expect(await stored('alice')).toBe('trialing:false:true');
+    expect(await stored('bob')).toBe('trialing:false:true');
+
+    // One owner's failure is collected, and the walk goes on.
+    f.dev.failNext('/v1/subscriptions');
+    const first = await f.billing.reconcileAll({ pageSize: 3 });
+    expect(first.checked).toBe(4);
+    expect(first.failed.map((x) => x.ownerId)).toEqual(['alice']);
+    expect(first.changed.map((c) => c.ownerId)).toEqual(['bob']);
+    expect(await stored('bob')).toBe('trialing:true:true');
+    expect(await stored('alice')).toBe('trialing:false:true');
+
+    const second = await f.billing.reconcileAll();
+    expect(second.failed).toEqual([]);
+    expect(second.changed.map((c) => c.ownerId)).toEqual(['alice']);
+    expect(await stored('alice')).toBe('canceled:false:false');
+    expect(await stored('carol')).toBe('trialing:false:true');
+
+    // Once every row matches Stripe, nothing changes.
+    expect(await f.billing.reconcileAll()).toEqual({
+      checked: 4,
+      changed: [],
+      failed: [],
+    });
+    await expect(f.billing.reconcileAll({ pageSize: 0 })).rejects.toThrow(
+      'pageSize',
+    );
+  },
+);
+
 foundingTest(
   'checkout charges only a Price the application expects, and replace gives way to another plan',
   async ({ f }) => {

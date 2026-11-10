@@ -9,7 +9,25 @@ class EmailDeliveryError extends Error {
   }
 }
 
-/** Production transport; tests inject EmailDev instead. Provider errors contain no message content. */
+/** Postmark's numeric `ErrorCode`, never its message text, which may echo addresses. */
+async function errorCode(response: Response) {
+  try {
+    const code = ((await response.json()) as { ErrorCode?: unknown })
+      ?.ErrorCode;
+    return typeof code === 'number' && Number.isFinite(code) ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Production transport; tests inject EmailDev instead. Every message is sent
+ * from this adapter's `from` argument, which wins over `message.from`
+ * (including `emailFrom` and a `renderEmail` sender), so one verified sender
+ * signature covers the deployment. A failure throws an error carrying only
+ * `httpStatus` and Postmark's numeric `ErrorCode` as `providerCode`, never
+ * message content or Postmark's error text.
+ */
 export function postmarkEmail(token: string, from: string): EmailSender {
   if (!token || !from)
     throw new Error('Configure Postmark and the sender address');
@@ -41,13 +59,9 @@ export function postmarkEmail(token: string, from: string): EmailSender {
             : {}),
         }),
       });
-      if (!response.ok) throw new EmailDeliveryError(response.status);
-      const result = (await response.json()) as { ErrorCode?: number };
-      if (result.ErrorCode !== 0)
-        throw new EmailDeliveryError(
-          response.status,
-          typeof result.ErrorCode === 'number' ? result.ErrorCode : undefined,
-        );
+      const code = await errorCode(response);
+      if (!response.ok || code !== 0)
+        throw new EmailDeliveryError(response.status, code);
     },
   };
 }

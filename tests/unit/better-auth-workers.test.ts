@@ -73,3 +73,33 @@ test('a Workers hook factory that throws leaves auth requests working', async ()
   expect(records.map((record) => record.event)).toContain('auth.hook.failed');
   expect(JSON.stringify(records)).not.toContain('private-hook@example.test');
 });
+
+test('Workers emailFrom may be read from the request environment', async () => {
+  const bindings = {
+    APP_ORIGIN: 'https://auth.example.test',
+    AUTH_SECRET: 'worker-test-secret-at-least-32-characters',
+    HYPERDRIVE: { connectionString: 'postgres://unused' },
+    EMAIL_FROM: 'App <signin@mail.example.test>',
+  };
+  const seen: unknown[] = [];
+  const app = createBetterAuthWorker<typeof bindings>({
+    email: () => ({ send: async () => {} }),
+    emailFrom: (env) => {
+      seen.push(env);
+      return env.EMAIL_FROM;
+    },
+  });
+  const response = await app.fetch(
+    new Request('https://auth.example.test/api/providers'),
+    bindings,
+  );
+  expect(response.status).toBe(200);
+  expect(seen).toEqual([bindings]);
+  // A preview that blanks its mail bindings still answers.
+  const empty = await app.fetch(
+    new Request('https://auth.example.test/api/providers'),
+    { ...bindings, EMAIL_FROM: '' },
+  );
+  expect(empty.status).toBe(200);
+  expect(seen).toHaveLength(2);
+});

@@ -12,7 +12,7 @@ import { emailOTP } from 'better-auth/plugins/email-otp';
 import { Hono } from 'hono';
 import { sql } from 'kysely';
 import { connectDatabase } from 'pgstencil/postgres';
-import type { EmailSender } from 'pgstencil';
+import { escapeHtml, type EmailMessage, type EmailSender } from 'pgstencil';
 import {
   clientIpHeader,
   keyed,
@@ -52,6 +52,91 @@ export interface AuthHooks {
   onError?: (error: unknown) => void;
 }
 
+/** What a sign-in email renderer receives for one email code. */
+export interface SignInEmailInput {
+  /** The requested recipient. The message must be addressed to exactly this address. */
+  email: string;
+  /** The one-time sign-in code. */
+  otp: string;
+  /** Minutes until the code expires. */
+  expiresInMinutes: number;
+  /** `AuthOptions.appName`, when set. Escape it with `escapeHtml` before placing it in HTML. */
+  appName?: string;
+  /** The resolved sender: `emailFrom`, or `signin@<hostname of origin>`. */
+  from: string;
+}
+
+/**
+ * The sign-in email pgstencil sends when no `renderEmail` is configured: sent
+ * from `input.from` to `input.email`, with `appName` in the subject only. A
+ * custom renderer can call it and adjust the result.
+ */
+export function defaultSignInEmail(input: SignInEmailInput): EmailMessage {
+  return {
+    from: input.from,
+    to: [input.email],
+    subject: input.appName
+      ? `Your ${input.appName} sign-in code`
+      : 'Your sign-in code',
+    text: `Your sign-in code is ${input.otp}. It expires in ${input.expiresInMinutes} minutes.`,
+    html: `<p>Your sign-in code is <strong>${escapeHtml(input.otp)}</strong>.</p><p>It expires in ${escapeHtml(input.expiresInMinutes)} minutes.</p>`,
+  };
+}
+
+const otpExpiresInSeconds = 600;
+
+/** A rendered message reaches exactly the address that requested the code, or nobody. */
+function addressedOnlyTo(message: EmailMessage, email: string) {
+  return (
+    !!message &&
+    typeof message === 'object' &&
+    Array.isArray(message.to) &&
+    message.to.length === 1 &&
+    message.to[0] === email &&
+    !message.cc?.length &&
+    !message.bcc?.length
+  );
+}
+
+async function sendSignInEmail(
+  options: AuthOptions,
+  email: string,
+  otp: string,
+) {
+  let message: EmailMessage;
+  try {
+    const input: SignInEmailInput = {
+      email,
+      otp,
+      expiresInMinutes: otpExpiresInSeconds / 60,
+      ...(options.appName ? { appName: options.appName } : {}),
+      from: options.emailFrom?.trim()
+        ? options.emailFrom
+        : `signin@${new URL(options.origin).hostname}`,
+    };
+    message = await (options.renderEmail ?? defaultSignInEmail)(input);
+    if (!addressedOnlyTo(message, email))
+      throw new Error('The rendered sign-in email has the wrong recipients');
+  } catch (error) {
+    diagnostic('email.delivery.failed', {
+      reason: 'unexpected_error',
+      ...diagnosticError(error),
+    });
+    throw error;
+  }
+  try {
+    await options.email.send(message);
+    diagnostic('email.delivery.succeeded');
+  } catch (error) {
+    diagnostic('email.delivery.failed', {
+      stage: 'transport',
+      reason: 'upstream_failure',
+      ...diagnosticError(error),
+    });
+    throw error;
+  }
+}
+
 export interface AuthOptions {
   database: ReturnType<typeof connectDatabase>;
   diagnostics?: DiagnosticOptions;
@@ -77,6 +162,25 @@ export interface AuthOptions {
   /** Keeps a hook's pending promise alive past the response; the Workers adapter passes `ExecutionContext.waitUntil`. */
   waitUntil?: (promise: Promise<unknown>) => void;
   appName?: string;
+  /**
+   * The sender of the default sign-in email, and `from` in `renderEmail`'s
+   * input. Defaults to `signin@<hostname of origin>`, so a deployment that
+   * forgets it is refused by its mail provider rather than sending as another
+   * domain. A blank string counts as omitted, so a preview that blanks its
+   * mail bindings keeps working. `postmarkEmail`'s own `from` argument
+   * overrides any message sender.
+   */
+  emailFrom?: string;
+  /**
+   * Composes the sign-in email; defaults to `defaultSignInEmail`. The message
+   * must be addressed only to `input.email` (no other `to`, `cc` or `bcc`): any
+   * other recipients, or a throw, fail the send with an
+   * `email.delivery.failed` diagnostic and nothing is delivered. Escape
+   * interpolated values in `html` with `escapeHtml` from `pgstencil`.
+   */
+  renderEmail?: (
+    input: SignInEmailInput,
+  ) => EmailMessage | Promise<EmailMessage>;
   successPath?: string;
   errorPath?: string;
 }
@@ -366,34 +470,17 @@ export function authOptions(options: AuthOptions): BetterAuthOptions {
         : []),
       emailOTP({
         otpLength: 8,
-        expiresIn: 600,
+        expiresIn: otpExpiresInSeconds,
         allowedAttempts: 3,
         storeOTP: {
           hash: async (otp) => keyed(options.secret, 'email-otp', otp),
         },
         async sendVerificationOTP({ email, otp, type }) {
           if (isIdentityEmail(email)) throw new Error('Not a delivery address');
+          // Only sign-in is enabled; Better Auth's other email-code flows stay off.
           if (type !== 'sign-in')
-            throw new Error('This example only supports sign-in email');
-          try {
-            await options.email.send({
-              from: 'signin@example.test',
-              to: [email],
-              subject: options.appName
-                ? `Your ${options.appName} sign-in code`
-                : 'Your sign-in code',
-              text: `Your sign-in code is ${otp}. It expires in 10 minutes.`,
-              html: `<p>Your sign-in code is <strong>${otp}</strong>.</p><p>It expires in 10 minutes.</p>`,
-            });
-            diagnostic('email.delivery.succeeded');
-          } catch (error) {
-            diagnostic('email.delivery.failed', {
-              stage: 'transport',
-              reason: 'upstream_failure',
-              ...diagnosticError(error),
-            });
-            throw error;
-          }
+            throw new Error(`Email codes are not supported for ${type}`);
+          await sendSignInEmail(options, email, otp);
         },
       }),
     ],

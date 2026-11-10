@@ -16,6 +16,21 @@ export interface CapturedEmail extends EmailMessage {
 export interface EmailSender {
   send(message: EmailMessage): Promise<void>;
 }
+const HTML_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+/**
+ * Converts any value to a string safe inside HTML text and quoted attribute
+ * values, escaping `&`, `<`, `>`, `"` and `'`. Use it for every
+ * application-supplied value interpolated into an email's `html`.
+ */
+export function escapeHtml(value: unknown): string {
+  return String(value).replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch]!);
+}
 export class EmailDev implements EmailSender {
   private messages: CapturedEmail[] = [];
   private cursor = 0;

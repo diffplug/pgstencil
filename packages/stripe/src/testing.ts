@@ -125,6 +125,16 @@ export async function createStripeDev(
       ended_at: null,
       canceled_at: null,
       trial_end: days ? seconds() + days * 86400 : null,
+      trial_settings: {
+        end_behavior: {
+          billing_cycle_anchor: null,
+          missing_payment_method:
+            p.get(
+              'subscription_data[trial_settings][end_behavior][missing_payment_method]',
+            ) ?? 'create_invoice',
+        },
+      },
+      pending_update: null,
       cancel_at: null,
       cancel_at_period_end: false,
       metadata: Object.fromEntries(
@@ -142,6 +152,8 @@ export async function createStripeDev(
             id: id('si'),
             quantity: 1,
             price: { id: price },
+            current_trial: null,
+            current_period_start: seconds(),
             current_period_end: days
               ? seconds() + days * 86400
               : periodEnd(price),
@@ -206,6 +218,12 @@ export async function createStripeDev(
     sub.ended_at = seconds();
     return event('customer.subscription.deleted', sub);
   }
+  /** Starts the item's next billing period now. */
+  function newPeriod(sub: Stripe.Subscription) {
+    const item = sub.items.data[0]!;
+    item.current_period_start = seconds();
+    item.current_period_end = periodEnd(item.price.id);
+  }
   function transition(
     subscriptionId: string,
     action:
@@ -213,21 +231,45 @@ export async function createStripeDev(
       | 'payment-failed'
       | 'cancel'
       | 'cancel-at-period-end'
-      | 'portal-cancel',
+      | 'portal-cancel'
+      | 'pause'
+      | 'resume',
   ) {
     const sub = subscriptions.get(subscriptionId);
     if (!sub) throw new Error('Subscription not found');
     let result: Stripe.Event;
     if (action === 'cancel') result = cancel(sub);
-    else {
+    else if (action === 'pause') {
+      // As the pause endpoint, or the portal's subscription_pause flow, makes:
+      // the period stops advancing until the subscription resumes.
+      if (!['active', 'trialing', 'past_due'].includes(sub.status))
+        throw new Error('Only an active subscription can be paused');
+      sub.status = 'paused';
+      sub.status_details = {
+        paused: {
+          type: 'subscription',
+          subscription: { type: 'pause_requested' },
+          transitioned_at: seconds(),
+        },
+      };
+      event('customer.subscription.updated', sub);
+      result = event('customer.subscription.paused', sub);
+    } else if (action === 'resume') {
+      // Resuming resets the billing cycle anchor to now, Stripe's default.
+      if (sub.status !== 'paused')
+        throw new Error('Subscription is not paused');
+      sub.status = 'active';
+      delete sub.status_details;
+      newPeriod(sub);
+      event('customer.subscription.updated', sub);
+      result = event('customer.subscription.resumed', sub);
+    } else {
       if (action === 'cancel-at-period-end') sub.cancel_at_period_end = true;
       else if (action === 'portal-cancel')
         sub.cancel_at = sub.items.data[0]!.current_period_end;
       else {
         sub.status = action === 'renew' ? 'active' : 'past_due';
-        sub.items.data[0]!.current_period_end = periodEnd(
-          sub.items.data[0]!.price.id,
-        );
+        newPeriod(sub);
       }
       result = event('customer.subscription.updated', sub);
     }
@@ -327,6 +369,14 @@ export async function createStripeDev(
           result as Record<string, unknown>,
         );
       } else if (path === '/v1/checkout/sessions' && req.method === 'POST') {
+        // Removed from Checkout creation at the endive API versions.
+        if (
+          [...body.keys()].some((key) => key.startsWith('payment_method_types'))
+        )
+          throw new Error('Received unknown parameter: payment_method_types');
+        const allowed = [...body]
+          .filter(([key]) => /^allowed_payment_method_types\[\d+\]$/.test(key))
+          .map(([, value]) => value);
         const sessionId = id('cs');
         const session = {
           id: sessionId,
@@ -341,6 +391,7 @@ export async function createStripeDev(
               .map(([key, value]) => [key.slice(9, -1), value]),
           ),
           subscription: null,
+          allowed_payment_method_types: allowed.length ? allowed : null,
           payment_status: 'unpaid',
           livemode: false,
           expires_at: Number(body.get('expires_at')),

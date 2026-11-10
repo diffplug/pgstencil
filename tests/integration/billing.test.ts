@@ -178,7 +178,7 @@ billingTest(
     )!;
     expect(creation.body).toMatchObject({
       payment_method_collection: 'always',
-      'payment_method_types[0]': 'card',
+      'allowed_payment_method_types[0]': 'card',
       'subscription_data[trial_period_days]': '14',
     });
     const sub = f.dev.completeCheckout(session.id);
@@ -275,6 +275,44 @@ billingTest(
     f.dev.transition(sub.id, 'renew');
     await f.deliver();
     expect((await f.billing.status('alice')).access).toBe(true);
+  },
+);
+
+billingTest(
+  'a paused subscription grants nothing and blocks another checkout; resuming restores access',
+  async ({ f }) => {
+    const { session } = await f.start();
+    const sub = f.dev.completeCheckout(session.id);
+    await f.deliver();
+    f.time.advanceDays(14);
+    f.dev.transition(sub.id, 'renew');
+    await f.deliver();
+    expect((await f.billing.status('alice')).access).toBe(true);
+    const paused = f.dev.transition(sub.id, 'pause');
+    if (paused.type !== 'customer.subscription.paused')
+      throw new Error(`Unexpected ${paused.type}`);
+    expect(paused.data.object.status_details?.paused.subscription.type).toBe(
+      'pause_requested',
+    );
+    await f.deliver();
+    const status = await f.billing.status('alice');
+    expect([status.access, status.subscription?.status]).toEqual([
+      false,
+      'paused',
+    ]);
+    await expect(f.start()).rejects.toThrow('Manage billing');
+    // Paused is not stale: it grants nothing until Stripe resumes it.
+    expect((await f.billing.reconcileStale({ limit: 10 })).reconciled).toEqual(
+      [],
+    );
+    f.time.advanceDays(10);
+    f.dev.transition(sub.id, 'resume');
+    await f.deliver();
+    expect(await f.billing.status('alice')).toMatchObject({
+      access: true,
+      // Resuming starts a new period at once.
+      accessUntil: new Date('2020-02-25T00:00:00Z'),
+    });
   },
 );
 
@@ -387,6 +425,36 @@ billingTest(
     await expect(
       f.billing.webhook(signed.body, signed.signature),
     ).rejects.toThrow('Timestamp');
+  },
+);
+
+billingTest(
+  'the five-minute tolerance reads the delivery signature: a retry signed hours later applies once, an old signature never',
+  async ({ f }) => {
+    const { session } = await f.start();
+    f.dev.completeCheckout(session.id);
+    const event = f.dev.events[0]!;
+    const first = f.dev.signed(event);
+    // Accepted at the tolerance's edge, then refused one second past it.
+    f.time.advanceMilliseconds(300_000);
+    await f.billing.webhook(first.body, first.signature);
+    f.time.advanceMilliseconds(1000);
+    await expect(
+      f.billing.webhook(first.body, first.signature),
+    ).rejects.toThrow('Timestamp');
+    // Stripe signs each delivery attempt when it sends it, so a retry of an
+    // hours-old event carries a fresh timestamp; the ledger makes it a no-op.
+    f.time.advanceHours(5);
+    const retry = f.dev.signed(event);
+    await f.billing.webhook(retry.body, retry.signature);
+    const ledger = await f.billing.db
+      .selectFrom('events')
+      .select(['id', 'attempts', 'failed'])
+      .execute();
+    expect(ledger.map((e) => [e.id, e.attempts, e.failed])).toEqual([
+      [event.id, 1, false],
+    ]);
+    expect((await f.billing.status('alice')).access).toBe(true);
   },
 );
 
@@ -1041,6 +1109,75 @@ billingTest(
     ]);
     await expect(f.billing.reconcileStale({ limit: 0 })).rejects.toThrow(
       'limit',
+    );
+  },
+);
+
+billingTest(
+  'reconcileAll walks every owner with a customer and reports exactly the owners a missed event left stale',
+  async ({ f }) => {
+    const subs: Record<string, string> = {};
+    for (const owner of ['alice', 'bob', 'carol', 'dave']) {
+      const { session } = await f.start('monthly', owner);
+      subs[owner] = f.dev.completeCheckout(session.id).id;
+    }
+    await f.deliver();
+    // An account without a customer has nothing in Stripe to compare.
+    await f.billing.account('erin', 'erin@example.test');
+    // Stripe ends alice's subscription and bob schedules his cancellation in
+    // the portal, but neither webhook arrives.
+    f.dev.transition(subs.alice!, 'cancel');
+    f.dev.transition(subs.bob!, 'portal-cancel');
+    f.dev.events.length = 0;
+    const stored = async (owner: string) => {
+      const { subscription, access } = await f.billing.status(owner);
+      return `${subscription!.status}:${subscription!.cancel_at_period_end}:${access}`;
+    };
+    const summary = (change: {
+      before: { status: string; cancel_at_period_end: boolean }[];
+      after: { status: string; cancel_at_period_end: boolean }[];
+    }) =>
+      [change.before, change.after]
+        .map((rows) =>
+          rows.map((r) => `${r.status}:${r.cancel_at_period_end}`).join(),
+        )
+        .join(' -> ');
+
+    // A page of one owner walks every page; a dry run writes nothing.
+    const dry = await f.billing.reconcileAll({ dryRun: true, pageSize: 1 });
+    expect(dry.checked).toBe(4);
+    expect(dry.failed).toEqual([]);
+    expect(dry.changed.map((c) => c.ownerId)).toEqual(['alice', 'bob']);
+    expect(dry.changed.map(summary)).toEqual([
+      'trialing:false -> canceled:false',
+      'trialing:false -> trialing:true',
+    ]);
+    expect(await stored('alice')).toBe('trialing:false:true');
+    expect(await stored('bob')).toBe('trialing:false:true');
+
+    // One owner's failure is collected, and the walk goes on.
+    f.dev.failNext('/v1/subscriptions');
+    const first = await f.billing.reconcileAll({ pageSize: 3 });
+    expect(first.checked).toBe(4);
+    expect(first.failed.map((x) => x.ownerId)).toEqual(['alice']);
+    expect(first.changed.map((c) => c.ownerId)).toEqual(['bob']);
+    expect(await stored('bob')).toBe('trialing:true:true');
+    expect(await stored('alice')).toBe('trialing:false:true');
+
+    const second = await f.billing.reconcileAll();
+    expect(second.failed).toEqual([]);
+    expect(second.changed.map((c) => c.ownerId)).toEqual(['alice']);
+    expect(await stored('alice')).toBe('canceled:false:false');
+    expect(await stored('carol')).toBe('trialing:false:true');
+
+    // Once every row matches Stripe, nothing changes.
+    expect(await f.billing.reconcileAll()).toEqual({
+      checked: 4,
+      changed: [],
+      failed: [],
+    });
+    await expect(f.billing.reconcileAll({ pageSize: 0 })).rejects.toThrow(
+      'pageSize',
     );
   },
 );

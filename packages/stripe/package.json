@@ -10,12 +10,12 @@
   "peerDependencies": {
     "kysely": "^0.29.5",
     "pgstencil": "workspace:^",
-    "stripe": "^22.6.1"
+    "stripe": "^23.1.0"
   },
   "devDependencies": {
     "kysely": "^0.29.5",
     "pgstencil": "workspace:*",
-    "stripe": "^22.6.1"
+    "stripe": "^23.1.0"
   },
   "engines": {
     "node": ">=24"

@@ -55,6 +55,14 @@ export type WebhookApply = (
   trx: Transaction<BillingDB>,
   context: WebhookContext,
 ) => Promise<void>;
+/** An owner `reconcileAll` changed: its subscription rows before and after, ordered by ID. */
+export interface ReconciledChange {
+  ownerId: string;
+  before: BillingSubscription[];
+  after: BillingSubscription[];
+}
+/** Thrown to roll back a dry run's transaction. */
+class RolledBack extends Error {}
 /** A completed subscription Checkout, read from its verified completion event. */
 export interface CompletedCheckout {
   /** The operation ID `checkout` returned. */
@@ -458,7 +466,8 @@ export class Billing<P extends string = string> {
           client_reference_id: ownerId,
           line_items: [{ price: operation.price_id, quantity: 1 }],
           payment_method_collection: 'always',
-          payment_method_types: ['card'],
+          // Filters the account's dynamically eligible methods down to cards.
+          allowed_payment_method_types: ['card'],
           ...(this.config.managedPayments
             ? { managed_payments: { enabled: true } }
             : {}),
@@ -849,6 +858,86 @@ export class Billing<P extends string = string> {
       );
     return { reconciled, failed };
   }
+  /**
+   * Reconciles every owner holding a Stripe customer, one at a time in owner
+   * ID order, reading `pageSize` (1-1000, default 100) owners per query: one
+   * `subscriptions.list` request each, for a one-off pass such as after a
+   * Stripe API version move. Returns how many owners it checked, each owner
+   * whose subscription rows changed, with the rows before and after, and each
+   * failure, without stopping. `dryRun` reconciles inside a transaction it
+   * rolls back, so it reports what would change and writes nothing.
+   */
+  async reconcileAll(
+    options: { dryRun?: boolean; pageSize?: number } = {},
+  ): Promise<{
+    checked: number;
+    changed: ReconciledChange[];
+    failed: { ownerId: string; error: unknown }[];
+  }> {
+    const { dryRun = false, pageSize = 100 } = options;
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 1000)
+      throw new Error('pageSize must be an integer between 1 and 1000');
+    const changed: ReconciledChange[] = [];
+    const failed: { ownerId: string; error: unknown }[] = [];
+    let checked = 0;
+    let cursor: string | undefined;
+    for (;;) {
+      let query = this.db
+        .selectFrom('accounts')
+        .select('owner_id')
+        .where('customer_id', 'is not', null)
+        .orderBy('owner_id')
+        .limit(pageSize);
+      if (cursor !== undefined) query = query.where('owner_id', '>', cursor);
+      const page = await query.execute();
+      for (const { owner_id: ownerId } of page) {
+        checked++;
+        await this.reconcileReporting(ownerId, dryRun).then(
+          (change) => change && changed.push(change),
+          (error: unknown) => failed.push({ ownerId, error }),
+        );
+      }
+      if (page.length < pageSize) break;
+      cursor = page.at(-1)!.owner_id;
+    }
+    return { checked, changed, failed };
+  }
+  private async reconcileReporting(
+    ownerId: string,
+    dryRun: boolean,
+  ): Promise<ReconciledChange | null> {
+    const rows = (trx: Transaction<BillingDB>) =>
+      trx
+        .selectFrom('subscriptions')
+        .selectAll()
+        .where('owner_id', '=', ownerId)
+        .orderBy('id')
+        .execute();
+    // Every resync rewrites `updated_at`, so it alone is no change.
+    const comparable = (subscriptions: BillingSubscription[]) =>
+      JSON.stringify(subscriptions.map(({ updated_at: _, ...row }) => row));
+    let change: ReconciledChange | null = null;
+    try {
+      await this.db.transaction().execute(async (trx) => {
+        // `before` is read under the owner lock, so no webhook lands between it and the resync.
+        await trx
+          .selectFrom('accounts')
+          .select('owner_id')
+          .where('owner_id', '=', ownerId)
+          .forUpdate()
+          .execute();
+        const before = await rows(trx);
+        await this.synchronize(trx, ownerId);
+        const after = await rows(trx);
+        if (comparable(before) !== comparable(after))
+          change = { ownerId, before, after };
+        if (dryRun) throw new RolledBack();
+      });
+    } catch (error) {
+      if (!(error instanceof RolledBack)) throw error;
+    }
+    return change;
+  }
   async status(ownerId: string) {
     const [account, subscriptions, entitled] = await Promise.all([
       this.db
@@ -972,6 +1061,8 @@ export class Billing<P extends string = string> {
         body,
         signature,
         this.config.webhookSecret,
+        // Seconds between the delivery's signed `t=` (Stripe signs every
+        // attempt afresh, so retries pass) and the injected clock.
         300,
         Stripe.createSubtleCryptoProvider(),
         this.time.now().getTime(),

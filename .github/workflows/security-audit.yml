@@ -35,9 +35,11 @@ jobs:
     # on any other branch, or a dispatch from one, never receives the token.
     environment:
       name: security-audit
-    # Generous: the audit runs the integration suite against real Postgres
-    # containers as evidence, then reads the auth package adversarially.
-    timeout-minutes: 40
+    # Generous: the audit runs the integration suites against real Postgres
+    # containers as evidence, then reads the auth and billing packages
+    # adversarially. Runs took 13 to 23 minutes before billing joined the scope.
+    # Keep this under the 55 minutes `release.yml` waits for the verdict.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,7 +50,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 26
+          node-version-file: package.json
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile

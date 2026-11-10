@@ -77,13 +77,13 @@
       "minimumReleaseAge": "14 days"
     },
     {
-      "description": "@types/node must not expose APIs newer than the Node major in .nvmrc and CI",
+      "description": "@types/node must not expose APIs newer than the Node major pinned in devEngines.runtime, which CI reads",
       "matchManagers": ["npm"],
       "matchPackageNames": ["@types/node"],
       "allowedVersions": ">=24 <25"
     },
     {
-      "description": "Node is governed by engines, .nvmrc and the CI setup-node version, and is bumped by hand",
+      "description": "Node is pinned in the root package.json devEngines.runtime, which pnpm and CI both read, and is bumped by hand",
       "matchPackageNames": ["node"],
       "enabled": false
     }

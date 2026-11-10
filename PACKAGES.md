@@ -119,8 +119,9 @@ has the steps.
 ### Sign-in email
 
 The email-code message is sent through the `email` sender you inject.
-`emailFrom` sets its sender; without it the sender is
-`signin@<hostname of origin>`, so a deployment that forgets it is refused by its
+`emailFrom` sets its sender, trimmed; without it, or when it is blank, the
+sender is `signin@<hostname of origin>` (`signin@[<address>]` for an IPv4
+origin and `signin@[IPv6:<address>]` for an IPv6 one), so a deployment that forgets it is refused by its
 mail provider instead of sending as another domain. On Workers, `emailFrom` may
 be `(env) => env.EMAIL_FROM`. `postmarkEmail(token, from)` always sends from its
 own `from` argument, whatever the message says.
@@ -131,7 +132,9 @@ or a promise of one; `defaultSignInEmail` is the built-in renderer, which a
 custom one can call and adjust. The message must be addressed to `email` alone,
 with no `cc` or `bcc`: any other recipient, or a renderer that throws, delivers
 nothing and records an `email.delivery.failed` diagnostic. Escape every value
-you interpolate into `html` with `escapeHtml` from `pgstencil`. Better Auth
+you interpolate into `html` with `escapeHtml` from `pgstencil`, or from
+`pgstencil/email` in code a browser also loads: that subpath exports the email
+types, `EmailDev` and `escapeHtml` and imports no Node built-in. Better Auth
 answers a send request 200 whether or not delivery succeeded, so watch that
 diagnostic rather than the response.
 

@@ -33,6 +33,7 @@ import {
   identityEmail,
   isIdentityEmail,
   providerSubject,
+  signInSender,
 } from './better-auth-email.ts';
 
 /** How a login proved identity: an email code, or a provider's ID. */
@@ -62,7 +63,10 @@ export interface SignInEmailInput {
   expiresInMinutes: number;
   /** `AuthOptions.appName`, when set. Escape it with `escapeHtml` before placing it in HTML. */
   appName?: string;
-  /** The resolved sender: `emailFrom`, or `signin@<hostname of origin>`. */
+  /**
+   * The resolved sender: `emailFrom` trimmed, or `signin@<hostname of origin>`
+   * (`signin@[<IPv4>]` or `signin@[IPv6:<address>]` for an IP origin).
+   */
   from: string;
 }
 
@@ -110,9 +114,7 @@ async function sendSignInEmail(
       otp,
       expiresInMinutes: otpExpiresInSeconds / 60,
       ...(options.appName ? { appName: options.appName } : {}),
-      from: options.emailFrom?.trim()
-        ? options.emailFrom
-        : `signin@${new URL(options.origin).hostname}`,
+      from: signInSender(options.emailFrom, options.origin),
     };
     message = await (options.renderEmail ?? defaultSignInEmail)(input);
     if (!addressedOnlyTo(message, email))
@@ -164,11 +166,13 @@ export interface AuthOptions {
   appName?: string;
   /**
    * The sender of the default sign-in email, and `from` in `renderEmail`'s
-   * input. Defaults to `signin@<hostname of origin>`, so a deployment that
-   * forgets it is refused by its mail provider rather than sending as another
-   * domain. A blank string counts as omitted, so a preview that blanks its
-   * mail bindings keeps working. `postmarkEmail`'s own `from` argument
-   * overrides any message sender.
+   * input. Defaults to `signin@<hostname of origin>`, or an address literal
+   * such as `signin@[127.0.0.1]` or `signin@[IPv6:::1]` for an IP origin, so a
+   * deployment that forgets it is refused by its mail provider rather than
+   * sending as another domain. Surrounding whitespace is trimmed, and a blank
+   * string counts as omitted, so a preview that blanks its mail bindings keeps
+   * working. `postmarkEmail`'s own `from` argument overrides any message
+   * sender.
    */
   emailFrom?: string;
   /**

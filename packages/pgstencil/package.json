@@ -1,14 +1,16 @@
 {
   "name": "pgstencil",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
     "./database": "./src/database.ts",
     "./snapshots": "./src/snapshots.ts",
     "./testing": "./src/testing.ts",
     "./postgres": "./src/postgres.ts",
-    "./diagnostics": "./src/diagnostics.ts"
+    "./diagnostics": "./src/diagnostics.ts",
+    "./email": "./src/email.ts"
   },
   "bin": {
     "pgstencil": "./src/cli.ts"
@@ -83,6 +85,10 @@
       "./diagnostics": {
         "types": "./dist/diagnostics.d.ts",
         "import": "./dist/diagnostics.js"
+      },
+      "./email": {
+        "types": "./dist/email.d.ts",
+        "import": "./dist/email.js"
       }
     },
     "bin": {

@@ -4,7 +4,12 @@
  * tooling peer loads, so `pgstencil help` and usage errors work in a project
  * whose configuration is broken.
  */
-import { parseArguments, usage, UsageError } from './arguments.ts';
+import {
+  loadEnvFiles,
+  parseArguments,
+  usage,
+  UsageError,
+} from './arguments.ts';
 
 /** Runs the command line `argv` and returns the process exit code. */
 export async function main(argv: readonly string[]): Promise<number> {
@@ -21,6 +26,8 @@ export async function main(argv: readonly string[]): Promise<number> {
     return 0;
   }
   try {
+    // Before configuration loads: a file may set PGSTENCIL_PROJECT_ROOT.
+    loadEnvFiles(command.envFiles ?? []);
     const { runCommand } = await import('./commands.ts');
     await runCommand(command);
     return 0;

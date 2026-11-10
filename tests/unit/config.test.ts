@@ -3,8 +3,10 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
+  insideNodeModules,
   parseConfig,
   readConfig,
+  withExtraSources,
 } from '../../packages/pgstencil/src/config.ts';
 import {
   defaultMigrations,
@@ -183,4 +185,46 @@ test('readConfig uses every default without a file and names a file that is not 
   expect(() => readConfig(directory)).toThrow(
     `${join(directory, 'pgstencil.json')} is not valid JSON`,
   );
+});
+
+test('--also sources follow the configured ones, inside the project root and each only once', () => {
+  const configured = parse({ migrations: ['vendor/sql', 'sql'] }).migrations;
+  expect(withExtraSources(root, configured, [])).toEqual(configured);
+  expect(withExtraSources(root, configured, ['preview/sql', './seed'])).toEqual(
+    [
+      join(root, 'vendor/sql'),
+      join(root, 'sql'),
+      join(root, 'preview/sql'),
+      join(root, 'seed'),
+    ],
+  );
+  expect(Object.isFrozen(configured)).toBe(true);
+  for (const escape of ['..', '../preview', resolve('/tmp/preview')])
+    expect(() => withExtraSources(root, configured, [escape]), escape).toThrow(
+      `--also must stay inside the project root: ${escape}`,
+    );
+  expect(() => withExtraSources(root, configured, ['./sql'])).toThrow(
+    '--also ./sql is already a migration source',
+  );
+  expect(() =>
+    withExtraSources(root, configured, ['preview', 'preview/']),
+  ).toThrow('--also preview/ is already a migration source');
+});
+
+test('a path is inside node_modules when any directory below the root is one', () => {
+  for (const path of [
+    'node_modules/@pgstencil/auth/better-auth-migrations',
+    'packages/app/node_modules/pkg/sql',
+    'node_modules',
+  ])
+    expect(insideNodeModules(root, join(root, path)), path).toBe(true);
+  for (const path of [
+    'migrations',
+    'node_modules_backup/sql',
+    'my_node_modules',
+  ])
+    expect(insideNodeModules(root, join(root, path)), path).toBe(false);
+  // Only the part below the project root counts.
+  const nested = resolve('/work/node_modules/app');
+  expect(insideNodeModules(nested, join(nested, 'migrations'))).toBe(false);
 });

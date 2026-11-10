@@ -677,14 +677,15 @@ export class Billing<P extends string = string> {
       .executeTakeFirstOrThrow();
     if (!account.customer_id) return;
     // Fetch after the owner lock: competing webhook reads cannot overwrite newer state.
-    const subscriptions = await this.stripe.subscriptions.list({
+    // Every page, ended ones included: only the complete list is authoritative.
+    const subscriptions: Stripe.Subscription[] = [];
+    for await (const sub of this.stripe.subscriptions.list({
       customer: account.customer_id,
       status: 'all',
       limit: 100,
-    });
-    if (subscriptions.has_more)
-      throw new Error('Subscription reconciliation requires pagination');
-    const recognized = subscriptions.data.filter(
+    }))
+      subscriptions.push(sub);
+    const recognized = subscriptions.filter(
       (sub) => sub.metadata.pgstencil_owner === ownerId,
     );
     const now = this.time.now();
@@ -861,11 +862,12 @@ export class Billing<P extends string = string> {
   /**
    * Reconciles every owner holding a Stripe customer, one at a time in owner
    * ID order, reading `pageSize` (1-1000, default 100) owners per query: one
-   * `subscriptions.list` request each, for a one-off pass such as after a
-   * Stripe API version move. Returns how many owners it checked, each owner
-   * whose subscription rows changed, with the rows before and after, and each
-   * failure, without stopping. `dryRun` reconciles inside a transaction it
-   * rolls back, so it reports what would change and writes nothing.
+   * `subscriptions.list` request each per 100 of its subscriptions, for a
+   * one-off pass such as after a Stripe API version move. Returns how many
+   * owners it checked, each owner whose subscription rows changed, with the
+   * rows before and after, and each failure, without stopping. `dryRun`
+   * reconciles inside a transaction it rolls back, so it reports what would
+   * change and writes nothing.
    */
   async reconcileAll(
     options: { dryRun?: boolean; pageSize?: number } = {},
@@ -1215,5 +1217,37 @@ export class Billing<P extends string = string> {
         .execute();
       throw error;
     }
+  }
+  /**
+   * Deletes the webhook ledger's events processed more than `olderThanDays`
+   * days (an integer from 30 to 3650; a day is 24 hours) before the injected
+   * clock, and returns how many it deleted. For a scheduled job. An event
+   * that was never processed, a failed one included, is always kept.
+   *
+   * The ledger is what makes a redelivery a no-op: a pruned event that
+   * reaches `webhook` again is processed again, its resync and `apply`
+   * included, so an `apply` that is not idempotent repeats its effects.
+   * Stripe retries a delivery for up to three days, so the 30-day floor
+   * leaves a wide margin; an event resent by hand later, from the Dashboard
+   * or the CLI, would still apply again.
+   */
+  async pruneEvents(options: { olderThanDays: number }): Promise<number> {
+    const { olderThanDays } = options;
+    if (
+      !Number.isInteger(olderThanDays) ||
+      olderThanDays < 30 ||
+      olderThanDays > 3650
+    )
+      throw new Error('olderThanDays must be an integer between 30 and 3650');
+    const cutoff = new Date(
+      this.time.now().getTime() - olderThanDays * 86_400_000,
+    );
+    const result = await this.db
+      .deleteFrom('events')
+      .where('processed_at', '<', cutoff)
+      // A processed event is never failed; this keeps the promise explicit.
+      .where('failed', '=', false)
+      .executeTakeFirst();
+    return Number(result.numDeletedRows);
   }
 }

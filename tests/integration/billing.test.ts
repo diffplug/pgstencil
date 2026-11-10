@@ -13,8 +13,9 @@ import {
   SUBSCRIBED,
   type BillingConfig,
   type BillingDB,
+  type WebhookApply,
 } from '../../packages/stripe/src/index.ts';
-import { appMigrations } from '../../examples/login/src/migrations.ts';
+import { billingMigrations } from '../../packages/stripe/src/migrations.ts';
 import {
   createStripeDev,
   type StripeDevOptions,
@@ -34,7 +35,7 @@ async function fixture(
   } = {},
 ) {
   const context = await createTestContext({
-    migrations: appMigrations,
+    migrations: billingMigrations,
   });
   const dev = await createStripeDev(
     context.time,
@@ -455,6 +456,165 @@ billingTest(
       [event.id, 1, false],
     ]);
     expect((await f.billing.status('alice')).access).toBe(true);
+  },
+);
+
+billingTest(
+  'reconciliation reads every page of a customer with more than 100 subscriptions',
+  async ({ f }) => {
+    const { session } = await f.start();
+    // The oldest subscription, so Stripe lists it last, on the final page.
+    const kept = f.dev.completeCheckout(session.id);
+    await f.deliver();
+    const customer = (await f.billing.customerOf('alice'))!;
+    const ended: string[] = [];
+    for (let i = 0; i < 205; i++) {
+      const created = await f.dev.stripe.checkout.sessions.create({
+        mode: 'subscription',
+        customer,
+        line_items: [{ price: f.dev.prices.monthly, quantity: 1 }],
+        payment_method_collection: 'always',
+        subscription_data: { metadata: { pgstencil_owner: 'alice' } },
+        expires_at: Math.floor(f.time.now().getTime() / 1000) + 3600,
+        success_url: 'https://example.test/billing',
+      });
+      const sub = f.dev.completeCheckout(created.id);
+      f.dev.transition(sub.id, 'cancel');
+      ended.push(sub.id);
+    }
+    f.dev.events.length = 0;
+    // A row Stripe no longer lists: a second current subscription, which
+    // withholds access until the complete list marks it missing.
+    await f.billing.db
+      .insertInto('subscriptions')
+      .values({
+        id: 'sub_unlisted',
+        owner_id: 'alice',
+        price_id: f.dev.prices.monthly,
+        status: 'active',
+        started_at: f.time.now(),
+        ended_at: null,
+        period_end: new Date(f.time.now().getTime() + 86_400_000),
+        trial_end: null,
+        cancel_at_period_end: false,
+        updated_at: f.time.now(),
+      })
+      .execute();
+    expect((await f.billing.status('alice')).access).toBe(false);
+    const before = f.dev.requests.length;
+    await f.billing.reconcile('alice');
+    // Newest first, 100 a page: the cursor is each page's last ID.
+    expect(
+      f.dev.requests
+        .slice(before)
+        .filter((r) => r.method === 'GET' && r.path === '/v1/subscriptions')
+        .map((r) => [r.body.limit, r.body.starting_after ?? null]),
+    ).toEqual([
+      ['100', null],
+      ['100', ended[105]],
+      ['100', ended[5]],
+    ]);
+    const rows = async () =>
+      Object.fromEntries(
+        (
+          await f.billing.db
+            .selectFrom('subscriptions')
+            .select(['id', 'status'])
+            .where('owner_id', '=', 'alice')
+            .execute()
+        ).map((row) => [row.id, row.status]),
+      );
+    expect(await rows()).toEqual({
+      [kept.id]: 'trialing',
+      sub_unlisted: 'missing',
+      ...Object.fromEntries(ended.map((id) => [id, 'canceled'])),
+    });
+    expect(await f.billing.status('alice')).toMatchObject({
+      access: true,
+      subscription: { id: kept.id, status: 'trialing' },
+    });
+    // A webhook for this owner resyncs every page too.
+    f.dev.transition(kept.id, 'cancel');
+    await f.deliver();
+    expect((await rows())[kept.id]).toBe('canceled');
+    expect(Object.keys(await rows())).toHaveLength(207);
+    expect((await f.billing.status('alice')).access).toBe(false);
+  },
+);
+
+billingTest(
+  'pruneEvents deletes only events processed before the retention window',
+  async ({ f }) => {
+    const { session } = await f.start();
+    const sub = f.dev.completeCheckout(session.id);
+    const [completed, created] = f.dev.events.splice(0);
+    const deliver = (event: typeof completed, apply?: WebhookApply) => {
+      const { body, signature } = f.dev.signed(event!);
+      return f.billing.webhook(body, signature, apply);
+    };
+    // Processed now, so 40 days from now it is past a 30-day window.
+    await deliver(completed);
+    // Failed, and never processed.
+    await expect(
+      deliver(created, async () => {
+        throw new Error('fulfillment failed');
+      }),
+    ).rejects.toThrow('fulfillment failed');
+    // Received but never processed, without a recorded failure.
+    await f.billing.db
+      .insertInto('events')
+      .values({
+        id: 'evt_unprocessed',
+        type: 'customer.subscription.updated',
+        received_at: f.time.now(),
+        processed_at: null,
+      })
+      .execute();
+    f.time.advanceDays(10);
+    const renewed = f.dev.transition(sub.id, 'renew');
+    f.dev.events.length = 0;
+    await deliver(renewed);
+    const ledger = async () =>
+      (
+        await f.billing.db
+          .selectFrom('events')
+          .select('id')
+          .orderBy('id')
+          .execute()
+      ).map((row) => row.id);
+    const all = [completed!.id, created!.id, 'evt_unprocessed', renewed.id];
+    expect(await ledger()).toEqual([...all].sort());
+    for (const olderThanDays of [29, 0, -30, 30.5, NaN, 3651])
+      await expect(f.billing.pruneEvents({ olderThanDays })).rejects.toThrow(
+        'olderThanDays must be an integer between 30 and 3650',
+      );
+    expect(await ledger()).toEqual([...all].sort());
+    f.time.advanceDays(30);
+    // 40 days after the first and exactly 30 after the renewal: only the
+    // first is older than the window.
+    expect(await f.billing.pruneEvents({ olderThanDays: 30 })).toBe(1);
+    expect(await ledger()).toEqual(
+      [created!.id, 'evt_unprocessed', renewed.id].sort(),
+    );
+    f.time.advanceMilliseconds(1);
+    expect(await f.billing.pruneEvents({ olderThanDays: 30 })).toBe(1);
+    // Unprocessed and failed events stay, however old.
+    f.time.advanceDays(3650);
+    expect(await f.billing.pruneEvents({ olderThanDays: 30 })).toBe(0);
+    expect(await ledger()).toEqual([created!.id, 'evt_unprocessed'].sort());
+    expect(
+      await f.billing.db
+        .selectFrom('events')
+        .select(['id', 'failed', 'processed_at'])
+        .where('id', '=', created!.id)
+        .executeTakeFirstOrThrow(),
+    ).toMatchObject({ failed: true, processed_at: null });
+    // The documented trade-off: a pruned event delivered again applies again.
+    let calls = 0;
+    await deliver(completed, async () => {
+      calls++;
+    });
+    expect(calls).toBe(1);
   },
 );
 

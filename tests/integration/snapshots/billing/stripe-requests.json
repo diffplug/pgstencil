@@ -2,9 +2,9 @@
   {
     "body": {
       "email": "alice@example.test",
-      "metadata[pgstencil_owner]": "jqA6VlbZ1K4GrKS9aUQe7FgrckZrZA0M"
+      "metadata[pgstencil_owner]": "OHwuerzNiiwOkmtWXqazhH1xgT4hc1Vt"
     },
-    "key": "D_OgPdV19cIvkrF1ykesk_OrFCxiC7p0MCk-RqE3hPY",
+    "key": "gH2lSz6u_itOGqkZ5v9DPPBuO_QCW9_7IX6ga3z7OHs",
     "method": "POST",
     "path": "/v1/customers"
   },
@@ -12,21 +12,21 @@
     "body": {
       "allowed_payment_method_types[0]": "card",
       "cancel_url": "<origin>/billing",
-      "client_reference_id": "jqA6VlbZ1K4GrKS9aUQe7FgrckZrZA0M",
-      "customer": "cus_HgmvnMSvObCu4iIM",
+      "client_reference_id": "OHwuerzNiiwOkmtWXqazhH1xgT4hc1Vt",
+      "customer": "cus_0nmnsfOSj-MgCIoi",
       "expires_at": "1577840400",
       "line_items[0][price]": "price_dev_yearly",
       "line_items[0][quantity]": "1",
-      "metadata[pgstencil_operation]": "R8dOwvjxBK18jKWxM-4hcWYzE7JQT1pi-ds2_vipnBg",
+      "metadata[pgstencil_operation]": "3TN5eLl6ck0OQ41_uzAJdDkTgfYP86A91XX1wi-SsXU",
       "mode": "subscription",
       "payment_method_collection": "always",
-      "subscription_data[metadata][pgstencil_operation]": "R8dOwvjxBK18jKWxM-4hcWYzE7JQT1pi-ds2_vipnBg",
-      "subscription_data[metadata][pgstencil_owner]": "jqA6VlbZ1K4GrKS9aUQe7FgrckZrZA0M",
+      "subscription_data[metadata][pgstencil_operation]": "3TN5eLl6ck0OQ41_uzAJdDkTgfYP86A91XX1wi-SsXU",
+      "subscription_data[metadata][pgstencil_owner]": "OHwuerzNiiwOkmtWXqazhH1xgT4hc1Vt",
       "subscription_data[trial_period_days]": "14",
       "subscription_data[trial_settings][end_behavior][missing_payment_method]": "cancel",
-      "success_url": "<origin>/billing?checkout=R8dOwvjxBK18jKWxM-4hcWYzE7JQT1pi-ds2_vipnBg"
+      "success_url": "<origin>/billing?checkout=3TN5eLl6ck0OQ41_uzAJdDkTgfYP86A91XX1wi-SsXU"
     },
-    "key": "R8dOwvjxBK18jKWxM-4hcWYzE7JQT1pi-ds2_vipnBg",
+    "key": "3TN5eLl6ck0OQ41_uzAJdDkTgfYP86A91XX1wi-SsXU",
     "method": "POST",
     "path": "/v1/checkout/sessions"
   }

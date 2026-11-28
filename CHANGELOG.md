@@ -4,7 +4,9 @@ The three packages (`pgstencil`, `@pgstencil/auth`, `@pgstencil/stripe`) share o
 
 ## Unreleased
 
-Nothing yet.
+### Changed
+
+- **`@pgstencil/auth` moves its exact Better Auth pin from 1.7.18 to 1.7.28**, which changes an application's lockfile and any dependency disclosure it publishes. Better Auth's own fixes in that range change what an application can observe: sending a new email OTP replaces the earlier code for that address instead of keeping it; deleting a user, `/revoke-session` and revoking all of a user's sessions now answer an error, `FAILED_TO_DELETE_USER` for a delete, where they reported success while the row or the cached sessions survived; and `user.delete.before` runs before the session and account deletes. An application that hooks user deletion or revokes sessions should check that it handles the new errors. Better Auth draws its random IDs in a different order, so an application that snapshots IDs under a seeded `RandomSource` sees them change once.
 
 ## 0.5.1 (2026-11-10)
 

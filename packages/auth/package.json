@@ -12,7 +12,7 @@
     "./better-auth-workers": "./src/better-auth-workers.ts"
   },
   "dependencies": {
-    "better-auth": "1.7.27",
+    "better-auth": "1.7.28",
     "jose": "^6.2.18"
   },
   "peerDependencies": {

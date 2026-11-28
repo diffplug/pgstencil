@@ -9,7 +9,7 @@
     "@hono/node-server": "2.1.11",
     "@pgstencil/auth": "workspace:*",
     "@pgstencil/stripe": "workspace:*",
-    "better-auth": "1.7.27",
+    "better-auth": "1.7.28",
     "hono": "^4.13.7",
     "kysely": "^0.29.5",
     "pg": "^8.16.0",

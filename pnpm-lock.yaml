@@ -219,7 +219,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: 2.1.11
-        version: 2.1.11(hono@4.13.19)
+        version: 2.1.11(hono@4.13.23)
       '@pgstencil/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -231,7 +231,7 @@ importers:
         version: 1.7.27(pg@8.23.1)(vitest@5.1.1(@types/node@24.19.2)(vite@8.2.2(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)))
       hono:
         specifier: ^4.13.7
-        version: 4.13.19
+        version: 4.13.23
       kysely:
         specifier: ^0.29.5
         version: 0.29.9
@@ -263,7 +263,7 @@ importers:
     devDependencies:
       hono:
         specifier: ^4.13.7
-        version: 4.13.19
+        version: 4.13.23
       kysely:
         specifier: ^0.29.5
         version: 0.29.9
@@ -1724,8 +1724,8 @@ packages:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
 
-  hono@4.13.19:
-    resolution: {integrity: sha512-KmXvQAXwcAHV+muzbIwoJ23niEB5nMoDVr9WcRkU8mvjUECm/1+7v4Jgp7P7a+H6MLFrh+vXrGonGrGS+RQfkA==}
+  hono@4.13.23:
+    resolution: {integrity: sha512-OS90dj7dcsftEEWCOef8jRbnHE5lbrOq0hNRqjSyPsOnaGZvvfof1KS05hQNb4kUOCfDq1mG3PmHoX37DMnHQg==}
     engines: {node: '>=16.9.0'}
 
   htmlparser2@10.1.0:
@@ -2937,9 +2937,9 @@ snapshots:
       protobufjs: 7.6.6
       yargs: 17.7.3
 
-  '@hono/node-server@2.1.11(hono@4.13.19)':
+  '@hono/node-server@2.1.11(hono@4.13.23)':
     dependencies:
-      hono: 4.13.19
+      hono: 4.13.23
 
   '@img/colour@1.1.0': {}
 
@@ -3869,7 +3869,7 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hono@4.13.19: {}
+  hono@4.13.23: {}
 
   htmlparser2@10.1.0:
     dependencies:
